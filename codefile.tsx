@@ -3,22 +3,22 @@ import { Field, Input, Text, useId } from '@fluentui/react-components';
 import { DynamicFormContext } from './DynamicFormContext';
 
 export interface SingleLineFieldProps {
-  id: string;                     // key in FormData / name attribute
-  displayName: string;            // label text
-  starterValue?: string | number; // default value for New; also used if provided in Edit
-  isRequired?: boolean;           // required indicator + validation
-  disabled?: boolean;             // read-only
+  id: string;
+  displayName: string;
+  starterValue?: string | number;
+  isRequired?: boolean;
+  disabled?: boolean;
 
   // TEXT ONLY
-  maxLength?: number;             // character cap
+  maxLength?: number;
 
   // NUMBER ONLY
-  type?: 'number';                // activates numeric behavior
-  min?: number;                   // inclusive lower bound
-  max?: number;                   // inclusive upper bound
-  contentAfter?: 'percentage';    // shows '%' suffix when numeric
+  type?: 'number';
+  min?: number;
+  max?: number;
+  contentAfter?: 'percentage';
 
-  placeholder?: string;           // hint text
+  placeholder?: string;
 }
 
 const REQUIRED_MSG = 'This is a required field and cannot be blank!';
@@ -45,7 +45,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const [error, setError] = React.useState<string>('');
   const [touched, setTouched] = React.useState<boolean>(false);
 
-  // mirror required/disabled into local state (still reactive to prop changes)
   const [isRequired, setIsRequired] = React.useState<boolean>(!!requiredProp);
   const [isDisabled, setIsDisabled] = React.useState<boolean>(!!disabledProp);
   React.useEffect(() => {
@@ -62,7 +61,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   // --- validation
   const validateText = React.useCallback((val: string): string => {
     if (isRequired && val.trim().length === 0) return REQUIRED_MSG;
-    // length overflow is handled in onBeforeInput/onPaste; no need to check here
     return '';
   }, [isRequired]);
 
@@ -86,7 +84,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     GlobalFormData(id, val);
   }, [GlobalErrorHandle, GlobalFormData, id]);
 
-  // --- initial prefill: New (8) vs Edit/View
+  // --- prefill: New (8) vs Edit/View
   React.useEffect(() => {
     if (FormMode === 8) {
       const initial = starterValue !== undefined ? toStr(starterValue) : '';
@@ -107,32 +105,33 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [FormMode, starterValue, id, isNumber]);
 
-  // --- TS-safe selection helper (selectionStart/End can be null)
+  // --- selection helper (TS-safe)
   const getSelection = (el: HTMLInputElement) => {
     const start = el.selectionStart ?? el.value.length;
     const end = el.selectionEnd ?? el.value.length;
     return { start, end };
   };
 
-  // --- prevent typing beyond maxLength + show message (TEXT only)
-  const handleBeforeInput: React.FormEventHandler<HTMLInputElement> = (e) => {
+  // Detect printable keys (ignore ctrl/cmd/alt, arrows, etc.)
+  const isPrintable = (e: React.KeyboardEvent<HTMLInputElement>) =>
+    !e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1;
+
+  // Show the SAME Field error style when user attempts to exceed maxLength
+  const handleKeyDown: React.ComponentProps<typeof Input>['onKeyDown'] = (e) => {
     if (isNumber || maxLength == null) return;
 
     const input = e.currentTarget;
-    const data = (e.nativeEvent as unknown as { data?: string | null })?.data ?? null;
-    if (!data) return; // deletion/composition/etc.
-
     const { start, end } = getSelection(input);
-    const incomingLen = data.length;
-    const projectedLen = input.value.length - (end - start) + incomingLen;
+    const replacing = end - start;
+    const atCap = input.value.length >= maxLength;
 
-    if (projectedLen > maxLength) {
-      e.preventDefault();
+    if (isPrintable(e) && replacing === 0 && atCap) {
+      // native maxLength will block the char; we just surface the error message
       setError(lengthMsg);
     }
   };
 
-  // --- handle paste overflow (TEXT only)
+  // Paste overflow handling (TEXT only) — trims to fit and shows error
   const handlePaste: React.ClipboardEventHandler<HTMLInputElement> = (e) => {
     if (isNumber || maxLength == null) return;
 
@@ -160,7 +159,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     }
   };
 
-  // --- local change
+  // Local change
   const handleChange: React.ComponentProps<typeof Input>['onChange'] = (_e, data) => {
     const raw = data.value ?? '';
     const next = isNumber ? digitsOnly(raw) : raw;
@@ -170,7 +169,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     // numbers: live-validate; text: defer required until blur
     let nextErr = isNumber ? validateNumber(next) : (touched ? validateText(next) : '');
 
-    // clear explicit length error when we're within cap again
+    // If we were showing the length error, clear it as soon as we're back within the cap
     if (!isNumber && maxLength != null && next.length <= maxLength && error === lengthMsg) {
       nextErr = touched ? validateText(next) : '';
     }
@@ -179,7 +178,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     // commitValue(next, nextErr); // enable for live commit if desired
   };
 
-  // --- blur commit
+  // Blur commit
   const handleBlur: React.FocusEventHandler<HTMLInputElement> = () => {
     setTouched(true);
     const err = computeError(localVal);
@@ -187,7 +186,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     commitValue(localVal, err);
   };
 
-  // --- optional % suffix
+  // Optional % suffix
   const after = isNumber && contentAfter === 'percentage'
     ? <Text size={400} id={`${inputId}Per`}>%</Text>
     : undefined;
@@ -209,8 +208,8 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
         value={localVal}
         onChange={handleChange}
         onBlur={handleBlur}
-        onBeforeInput={handleBeforeInput}
-        onPaste={handlePaste}
+        onKeyDown={handleKeyDown}  // <-- shows Field-style error when typing at cap
+        onPaste={handlePaste}      // <-- shows Field-style error when pasting beyond cap
         disabled={isDisabled}
         // text-only
         maxLength={!isNumber ? maxLength : undefined}
@@ -223,4 +222,3 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     </Field>
   );
 }
-```
