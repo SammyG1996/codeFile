@@ -105,33 +105,14 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [FormMode, starterValue, id, isNumber]);
 
-  // --- selection helper (TS-safe)
+  // TS-safe selection helper for paste
   const getSelection = (el: HTMLInputElement) => {
     const start = el.selectionStart ?? el.value.length;
     const end = el.selectionEnd ?? el.value.length;
     return { start, end };
   };
 
-  // Detect printable keys (ignore ctrl/cmd/alt, arrows, etc.)
-  const isPrintable = (e: React.KeyboardEvent<HTMLInputElement>) =>
-    !e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1;
-
-  // Show the SAME Field error style when user attempts to exceed maxLength
-  const handleKeyDown: React.ComponentProps<typeof Input>['onKeyDown'] = (e) => {
-    if (isNumber || maxLength == null) return;
-
-    const input = e.currentTarget;
-    const { start, end } = getSelection(input);
-    const replacing = end - start;
-    const atCap = input.value.length >= maxLength;
-
-    if (isPrintable(e) && replacing === 0 && atCap) {
-      // native maxLength will block the char; we just surface the error message
-      setError(lengthMsg);
-    }
-  };
-
-  // Paste overflow handling (TEXT only) — trims to fit and shows error
+  // Trim pasted text to fit and show length error if we truncated
   const handlePaste: React.ClipboardEventHandler<HTMLInputElement> = (e) => {
     if (isNumber || maxLength == null) return;
 
@@ -155,7 +136,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       const insert = pasteText.slice(0, Math.max(0, spaceLeft));
       const nextValue = input.value.slice(0, start) + insert + input.value.slice(end);
       setLocalVal(nextValue);
-      setError(lengthMsg);
+      setError(lengthMsg); // show same error style as required
     }
   };
 
@@ -166,22 +147,26 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
     setLocalVal(next);
 
-    // numbers: live-validate; text: defer required until blur
-    let nextErr = isNumber ? validateNumber(next) : (touched ? validateText(next) : '');
-
-    // If we were showing the length error, clear it as soon as we're back within the cap
-    if (!isNumber && maxLength != null && next.length <= maxLength && error === lengthMsg) {
-      nextErr = touched ? validateText(next) : '';
+    // TEXT: show length error whenever at/over cap; clears once below cap
+    if (!isNumber && maxLength != null && next.length >= maxLength) {
+      setError(lengthMsg);
+      return; // keep length error dominant; blur will still commit
     }
 
+    // Otherwise normal validation rules
+    const nextErr = isNumber ? validateNumber(next) : (touched ? validateText(next) : '');
     setError(nextErr);
-    // commitValue(next, nextErr); // enable for live commit if desired
+
+    // commitValue(next, nextErr); // opt-in for live commit if needed
   };
 
   // Blur commit
   const handleBlur: React.FocusEventHandler<HTMLInputElement> = () => {
     setTouched(true);
-    const err = computeError(localVal);
+    const err =
+      !isNumber && maxLength != null && localVal.length >= maxLength
+        ? lengthMsg
+        : computeError(localVal);
     setError(err);
     commitValue(localVal, err);
   };
@@ -208,8 +193,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
         value={localVal}
         onChange={handleChange}
         onBlur={handleBlur}
-        onKeyDown={handleKeyDown}  // <-- shows Field-style error when typing at cap
-        onPaste={handlePaste}      // <-- shows Field-style error when pasting beyond cap
+        onPaste={handlePaste}
         disabled={isDisabled}
         // text-only
         maxLength={!isNumber ? maxLength : undefined}
