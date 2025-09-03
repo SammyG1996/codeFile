@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Field, Input, Text, useId } from '@fluentui/react-components';
 import { DynamicFormContext } from './DynamicFormContext';
 
+/** Props */
 export interface SingleLineFieldProps {
   id: string;
   displayName: string;
@@ -19,21 +20,43 @@ export interface SingleLineFieldProps {
   contentAfter?: 'percentage';
 
   placeholder?: string;
+  className?: string;
+
+  /** NEW: optional helper text shown after the input */
+  description?: string;
 }
 
+/** Messages */
 const REQUIRED_MSG = 'This is a required field and cannot be blank!';
 const INVALID_NUM_MSG = 'Please enter valid numeric value!';
 const rangeMsg = (min?: number, max?: number) =>
-  min != null && max != null ? `Value must be between ${min} and ${max}.`
-  : min != null ? `Value must be ≥ ${min}.`
-  : max != null ? `Value must be ≤ ${max}.`
-  : '';
+  (min !== null && min !== undefined) && (max !== null && max !== undefined)
+    ? `Value must be between ${min} and ${max}.`
+    : (min !== null && min !== undefined)
+      ? `Value must be ≥ ${min}.`
+      : (max !== null && max !== undefined)
+        ? `Value must be ≤ ${max}.`
+        : '';
+
+/** TS helper for strict null checks */
+const isDefined = <T,>(v: T | null | undefined): v is T => v !== null && v !== undefined;
 
 export default function SingleLineComponent(props: SingleLineFieldProps): JSX.Element {
   const {
-    id, displayName, starterValue,
-    isRequired: requiredProp, disabled: disabledProp,
-    maxLength, type, min, max, contentAfter, placeholder
+    id,
+    displayName,
+    starterValue,
+    isRequired: requiredProp,
+    disabled: disabledProp,
+    maxLength,
+    type,
+    min,
+    max,
+    contentAfter,
+    placeholder,
+    className,
+    // default so the short-circuit check is always safe
+    description = '',
   } = props;
 
   const { FormData, GlobalFormData, FormMode, GlobalErrorHandle } =
@@ -41,10 +64,12 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   const inputId = useId('input');
 
+  // Controlled state
   const [localVal, setLocalVal] = React.useState<string>('');
   const [error, setError] = React.useState<string>('');
   const [touched, setTouched] = React.useState<boolean>(false);
 
+  // Mirror flags (reactive to prop changes)
   const [isRequired, setIsRequired] = React.useState<boolean>(!!requiredProp);
   const [isDisabled, setIsDisabled] = React.useState<boolean>(!!disabledProp);
   React.useEffect(() => {
@@ -53,22 +78,20 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   }, [requiredProp, disabledProp]);
 
   const isNumber = type === 'number';
+  const toStr = (v: unknown) => (v === null || v === undefined ? '' : String(v));
 
-  // Allow negative only if either bound is negative (implicit behavior)
-  const allowNegative = (min != null && min < 0) || (max != null && max < 0);
+  // Allow negatives only if boundaries allow
+  const allowNegative = (isDefined(min) && min < 0) || (isDefined(max) && max < 0);
 
-  const toStr = (v: unknown) => (v == null ? '' : String(v));
-
-  // --- DECIMAL SANITIZER (single '.'; '-' only at start and only if allowed)
+  // DECIMAL sanitizer: one leading '-' (if allowed) + single '.'
   const decimalSanitizer = React.useCallback((s: string): string => {
-    let out = s.replace(/[^0-9.-]/g, '');         // keep digits, dot, minus
-    if (!allowNegative) out = out.replace(/-/g, ''); // strip '-' if not allowed
-    else {
-      // keep only a single leading '-'
+    let out = s.replace(/[^0-9.-]/g, '');
+    if (!allowNegative) {
+      out = out.replace(/-/g, '');
+    } else {
       const neg = out.startsWith('-');
       out = (neg ? '-' : '') + out.slice(neg ? 1 : 0).replace(/-/g, '');
     }
-    // keep only the first dot
     const i = out.indexOf('.');
     if (i !== -1) {
       out = out.slice(0, i + 1) + out.slice(i + 1).replace(/\./g, '');
@@ -76,20 +99,20 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return out;
   }, [allowNegative]);
 
-  // Preserve integer sanitizer for text->number transition clarity (unused now)
-  const digitsOnly = (s: string) => s.replace(/[^\d]/g, '');
+  // UNUSED (kept for reference; integer-only sanitizer from earlier versions)
+  // const digitsOnly = (s: string) => s.replace(/[^\d]/g, '');
 
-  const lengthMsg = maxLength != null ? `Maximum length is ${maxLength} characters.` : '';
+  const lengthMsg = isDefined(maxLength) ? `Maximum length is ${maxLength} characters.` : '';
 
-  // --- validation
+  // Validation
   const validateText = React.useCallback((val: string): string => {
     if (isRequired && val.trim().length === 0) return REQUIRED_MSG;
     return '';
   }, [isRequired]);
 
-  // Accepts: "12", "12.", "12.3", ".5", "-12.3" (if negatives allowed)
+  // Accept: "12", "12.", "0.5", ".75", "-3.2" (if negatives allowed)
   const isNumericString = React.useCallback((val: string): boolean => {
-    if (!val || !val.trim()) return false;
+    if (!val || val.trim().length === 0) return false;
     const re = allowNegative
       ? /^-?(?:\d+\.?\d*|\.\d+)$/
       : /^(?:\d+\.?\d*|\.\d+)$/;
@@ -101,16 +124,16 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     if (val.trim().length === 0) return '';
     if (!isNumericString(val)) return INVALID_NUM_MSG;
 
-    const n = Number(val); // safe after regex check
+    const n = Number(val);
     if (Number.isNaN(n)) return INVALID_NUM_MSG;
 
-    if (min != null && n < min) return rangeMsg(min, max);
-    if (max != null && n > max) return rangeMsg(min, max);
+    if (isDefined(min) && n < min) return rangeMsg(min, max);
+    if (isDefined(max) && n > max) return rangeMsg(max, max);
     return '';
   }, [isRequired, min, max, isNumericString]);
 
   const computeError = React.useCallback(
-    (val: string): string => (isNumber ? validateNumber(val) : validateText(val)),
+    (val: string) => (isNumber ? validateNumber(val) : validateText(val)),
     [isNumber, validateNumber, validateText]
   );
 
@@ -119,7 +142,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     GlobalFormData(id, val);
   }, [GlobalErrorHandle, GlobalFormData, id]);
 
-  // --- prefill: New (8) vs Edit/View
+  // Prefill: New (8) vs Edit/View
   React.useEffect(() => {
     if (FormMode === 8) {
       const initial = starterValue !== undefined ? toStr(starterValue) : '';
@@ -140,16 +163,16 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [FormMode, starterValue, id, isNumber, decimalSanitizer]);
 
-  // TS-safe selection helper (used for paste logic on text fields)
+  // Selection helper for paste (TS-safe)
   const getSelection = (el: HTMLInputElement) => {
     const start = el.selectionStart ?? el.value.length;
     const end = el.selectionEnd ?? el.value.length;
     return { start, end };
   };
 
-  // Trim pasted text to fit and show length error if we truncated (TEXT only)
+  // TEXT: trim pasted content to fit; show Field-style error if truncated
   const handlePaste: React.ClipboardEventHandler<HTMLInputElement> = (e) => {
-    if (isNumber || maxLength == null) return;
+    if (isNumber || !isDefined(maxLength)) return;
 
     const input = e.currentTarget;
     const pasteText = e.clipboardData.getData('text');
@@ -178,31 +201,27 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   // Local change
   const handleChange: React.ComponentProps<typeof Input>['onChange'] = (_e, data) => {
     const raw = data.value ?? '';
-
-    const next = isNumber
-      ? decimalSanitizer(raw)          // allow decimals (and '-' if allowed by range)
-      : raw;
-
+    const next = isNumber ? decimalSanitizer(raw) : raw;
     setLocalVal(next);
 
-    // TEXT: show length error whenever at/over cap; clears once below cap
-    if (!isNumber && maxLength != null && next.length >= maxLength) {
+    // TEXT: show length error at/over cap; clears when below
+    if (!isNumber && isDefined(maxLength) && next.length >= maxLength) {
       setError(lengthMsg);
       return;
     }
 
-    // numbers: live-validate; text: defer required until blur
+    // NUMBERS: live-validate; TEXT: defer required until blur unless touched
     const nextErr = isNumber ? validateNumber(next) : (touched ? validateText(next) : '');
     setError(nextErr);
 
-    // commitValue(next, nextErr); // opt-in for live commit
+    // commitValue(next, nextErr); // uncomment for live commits
   };
 
   // Blur commit
   const handleBlur: React.FocusEventHandler<HTMLInputElement> = () => {
     setTouched(true);
     const err =
-      !isNumber && maxLength != null && localVal.length >= maxLength
+      (!isNumber && isDefined(maxLength) && localVal.length >= maxLength)
         ? lengthMsg
         : computeError(localVal);
     setError(err);
@@ -214,7 +233,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     ? <Text size={400} id={`${inputId}Per`}>%</Text>
     : undefined;
 
-  const hasError = !!error;
+  const hasError = error !== '';
 
   return (
     <Field
@@ -222,26 +241,32 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       required={isRequired}
       validationMessage={hasError ? error : undefined}
       validationState={hasError ? 'error' : undefined}
-      size="medium"
+      /* size prop intentionally omitted */
     >
       <Input
         id={inputId}
         name={id}
+        className={className}
         placeholder={placeholder}
         value={localVal}
         onChange={handleChange}
         onBlur={handleBlur}
         onPaste={handlePaste}
         disabled={isDisabled}
-        // text-only
-        maxLength={!isNumber ? maxLength : undefined}
-        // number-only
+
+        // TEXT ONLY
+        maxLength={!isNumber && isDefined(maxLength) ? maxLength : undefined}
+
+        // NUMBER ONLY
         type={isNumber ? 'number' : 'text'}
-        inputMode={isNumber ? 'decimal' : undefined} // mobile keyboards show decimal keypad
-        min={isNumber && min != null ? min : undefined}
-        max={isNumber && max != null ? max : undefined}
+        inputMode={isNumber ? 'decimal' : undefined}
+        min={isNumber && isDefined(min) ? min : undefined}
+        max={isNumber && isDefined(max) ? max : undefined}
         contentAfter={after}
       />
+
+      {/* NEW: description below input (short-circuit, strict equality) */}
+      {description !== '' && <div className="descriptionText">{description}</div>}
     </Field>
   );
 }
