@@ -9,7 +9,7 @@
  *     displayName="Title"            // REQUIRED
  *     maxLength={120}                // OPTIONAL
  *     isRequired={true}              // OPTIONAL
- *     disabled={false}               // OPTIONAL (overridden by AllDisabledFields / perms)
+ *     disabled={false}               // OPTIONAL
  *     starterValue="Prefilled text"  // OPTIONAL (used in New mode)
  *     placeholder="Enter title"      // OPTIONAL
  *     description="Shown under input as helper text" // OPTIONAL
@@ -26,7 +26,7 @@
  *     decimalPlaces="two"            // OPTIONAL: 'automatic' | 'one' | 'two' (default 'automatic')
  *     contentAfter="percentage"      // OPTIONAL: renders '%' suffix
  *     isRequired={true}              // OPTIONAL
- *     disabled={false}               // OPTIONAL (overridden by AllDisabledFields / perms)
+ *     disabled={false}               // OPTIONAL
  *     starterValue={12.5}            // OPTIONAL (used in New mode)
  *     placeholder="e.g. 12.5"        // OPTIONAL
  *     description="0 - 100, up to 2 decimals" // OPTIONAL
@@ -34,57 +34,21 @@
  *   />
  *
  * NOTES
- * - Prefill runs ONCE on mount.
- * - Permissions recompute when context/props change.
- * - Hiding logic is scaffolded but commented out for later enablement.
+ * - Prefill (value seed + error clear) runs ONCE on mount.
+ * - Old integer-only sanitizer is kept commented for reference.
  */
 
 import * as React from 'react';
 import { Field, Input, Text, useId } from '@fluentui/react-components';
 import { DynamicFormContext } from './DynamicFormContext';
 
-/* -------------------------------------------------------
- * Local TS types for context (use until your context exports them)
- * -----------------------------------------------------*/
-type GroupRule = {
-  groupSource: {
-    groupName: string;
-    editableOnly?: string[];
-    visibleOnly?: string[];
-  };
-};
-
-interface UserBasedPerms {
-  groupBased?: GroupRule[];
-}
-
-interface SPGroupEntry {
-  title?: string;
-  Title?: string;
-  [k: string]: any;
-}
-
-interface CurUserInfo {
-  displayName?: string;
-  Dept?: string;
-  SPGroups?: SPGroupEntry[];
-  [k: string]: any;
-}
-
-interface DynamicFormContextType {
+/* Minimal context typing (only what we use here) */
+interface DFMinimal {
   FormData?: Record<string, any>;
   FormMode?: number;
-  GlobalFormData: (elmIntrnName: string, elmValue: any) => void;
-  GlobalErrorHandle: (elmIntrnName: string, errorMessage: string | null) => void;
-
-  // NEW pieces we’re using
-  AllDisabledFields?: string[];
-  AllHiddenFields?: string[];
-  userBasedPerms?: UserBasedPerms;
-  curUserInfo?: CurUserInfo;
+  GlobalFormData: (id: string, value: any) => void;
+  GlobalErrorHandle: (id: string, error: string | null) => void;
 }
-
-/* ----------------------------------------------------- */
 
 export interface SingleLineFieldProps {
   id: string;
@@ -123,7 +87,6 @@ const decimalLimitMsg = (n: 1 | 2) =>
   `Maximum ${n} decimal place${n === 1 ? '' : 's'} allowed.`;
 
 const isDefined = <T,>(v: T | null | undefined): v is T => v !== null && v !== undefined;
-const norm = (s: unknown): string => String(s ?? '').trim().toLowerCase();
 
 export default function SingleLineComponent(props: SingleLineFieldProps): JSX.Element {
   const {
@@ -143,17 +106,12 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     description = '',
   } = props;
 
-  // Cast the context to our local interface so TS knows about the added fields
   const {
     FormData,
     GlobalFormData,
     FormMode,
     GlobalErrorHandle,
-    AllDisabledFields,
-    AllHiddenFields, // used later (commented scaffold)
-    userBasedPerms,
-    curUserInfo,
-  } = React.useContext(DynamicFormContext) as unknown as DynamicFormContextType;
+  } = React.useContext(DynamicFormContext) as unknown as DFMinimal;
 
   const inputId = useId('input');
 
@@ -162,10 +120,9 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const [error, setError] = React.useState<string>('');
   const [touched, setTouched] = React.useState<boolean>(false);
 
-  // Mirror flags (reactive to prop changes)
+  // Mirror flags (react to prop changes)
   const [isRequired, setIsRequired] = React.useState<boolean>(!!requiredProp);
   const [isDisabled, setIsDisabled] = React.useState<boolean>(!!disabledProp);
-  // const [isHidden, setIsHidden] = React.useState<boolean>(false); // for future hiding
 
   React.useEffect(() => {
     setIsRequired(!!requiredProp);
@@ -175,14 +132,17 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const isNumber = type === 'number';
   const toStr = (v: unknown) => (v === null || v === undefined ? '' : String(v));
 
+  // Allow negatives only if boundaries allow
   const allowNegative = (isDefined(min) && min < 0) || (isDefined(max) && max < 0);
 
+  // Decimal places limit (null = unlimited)
   const decimalLimit: 1 | 2 | null = React.useMemo(() => {
     if (decimalPlaces === 'one') return 1;
     if (decimalPlaces === 'two') return 2;
-    return null;
+    return null; // 'automatic'
   }, [decimalPlaces]);
 
+  // DECIMAL sanitizer: keep digits, one leading '-', single '.'
   const decimalSanitizer = React.useCallback((s: string): string => {
     let out = s.replace(/[^0-9.-]/g, '');
     if (!allowNegative) {
@@ -198,7 +158,8 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return out;
   }, [allowNegative]);
 
-  // const digitsOnly = (s: string) => s.replace(/[^\d]/g, ''); // UNUSED (kept for reference)
+  // UNUSED legacy integer-only sanitizer (kept for reference)
+  // const digitsOnly = (s: string) => s.replace(/[^\d]/g, '');
 
   const lengthMsg = isDefined(maxLength) ? `Maximum length is ${maxLength} characters.` : '';
 
@@ -225,6 +186,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return '';
   }, [isRequired]);
 
+  // Accept: "12", "12.", "0.5", ".75", "-3.2" (if negatives allowed)
   const isNumericString = React.useCallback((val: string): boolean => {
     if (!val || val.trim().length === 0) return false;
     const re = allowNegative
@@ -287,83 +249,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // run once
 
-  /**
-   * Permissions / visibility effect
-   * Precedence:
-   *   1) AllDisabledFields → disabled (hard stop)
-   *   2) userBasedPerms + curUserInfo groups → decide disabled (and future hidden)
-   *   3) Prop-level disabled flag still applies if true
-   */
-  React.useEffect(() => {
-    const fieldNameNorm = norm(displayName);
-
-    // 1) AllDisabledFields precedence
-    const disabledByAllDisabled =
-      Array.isArray(AllDisabledFields) &&
-      AllDisabledFields.some((n) => norm(n) === fieldNameNorm);
-
-    if (disabledByAllDisabled) {
-      setIsDisabled(true);
-      return;
-    }
-
-    // 2) Group-based perms
-    const groupsArray: SPGroupEntry[] = Array.isArray(curUserInfo?.SPGroups)
-      ? (curUserInfo!.SPGroups as SPGroupEntry[])
-      : [];
-    const userGroupTitles = new Set(
-      groupsArray
-        .map((g) => norm(g?.title ?? g?.Title))
-        .filter((s) => s !== '')
-    );
-
-    const rules: GroupRule[] = Array.isArray(userBasedPerms?.groupBased)
-      ? (userBasedPerms!.groupBased as GroupRule[])
-      : [];
-
-    let disabledByPerms = true;   // default: disabled unless an enabling rule applies
-    // let hiddenByPerms = false; // future: default visible
-
-    for (const rule of rules) {
-      const src = rule?.groupSource;
-      if (!src) continue;
-
-      const inGroup = userGroupTitles.has(norm(src.groupName));
-      if (!inGroup) {
-        // if user not in this group, this rule does not grant permissions
-        continue;
-      }
-
-      const editableArr = Array.isArray(src.editableOnly) ? src.editableOnly : [];
-      const visibleArr  = Array.isArray(src.visibleOnly)  ? src.visibleOnly  : [];
-
-      const editable = editableArr.some((n) => norm(n) === fieldNameNorm);
-      const _visible = visibleArr.some((n) => norm(n) === fieldNameNorm); // future use
-      void _visible; // mark as intentionally unused to silence TS warning
-
-      // If any matched group lists this field as editable → enabled
-      if (editable) {
-        disabledByPerms = false;
-      }
-
-      // Future hiding support (leave commented until you enable it):
-      // if (_visible) {
-      //   hiddenByPerms = false;
-      // } else {
-      //   hiddenByPerms = true;
-      // }
-    }
-
-    // // AllHiddenFields future precedence (example):
-    // const hiddenByAllHidden =
-    //   Array.isArray(AllHiddenFields) &&
-    //   AllHiddenFields.some((n) => norm(n) === fieldNameNorm));
-    // setIsHidden(hiddenByAllHidden || hiddenByPerms);
-
-    const finalDisabled = !!disabledProp || disabledByPerms;
-    setIsDisabled(finalDisabled);
-  }, [displayName, disabledProp, AllDisabledFields, AllHiddenFields, userBasedPerms, curUserInfo]);
-
   // Selection helper (TS-safe)
   const getSelection = (el: HTMLInputElement) => {
     const start = el.selectionStart ?? el.value.length;
@@ -371,7 +256,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return { start, end };
   };
 
-  // TEXT paste
+  // TEXT: limit paste to fit maxLength
   const handlePaste: React.ClipboardEventHandler<HTMLInputElement> = (e) => {
     if (isNumber || !isDefined(maxLength)) return;
 
@@ -462,8 +347,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const stepAttr = isNumber
     ? (decimalLimit === 1 ? '0.1' : decimalLimit === 2 ? '0.01' : 'any')
     : undefined;
-
-  // if (isHidden) return null; // enable when you wire up hiding
 
   return (
     <Field
