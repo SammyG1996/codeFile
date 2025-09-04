@@ -19,10 +19,13 @@ export interface SingleLineFieldProps {
   max?: number;
   contentAfter?: 'percentage';
 
+  /** NEW: decimal places policy for number fields */
+  decimalPlaces?: 'automatic' | 'one' | 'two';
+
   placeholder?: string;
   className?: string;
 
-  /** NEW: optional helper text shown after the input */
+  /** Optional helper text rendered under the input */
   description?: string;
 }
 
@@ -37,6 +40,8 @@ const rangeMsg = (min?: number, max?: number) =>
       : (max !== null && max !== undefined)
         ? `Value must be ≤ ${max}.`
         : '';
+const decimalLimitMsg = (n: 1 | 2) =>
+  `Maximum ${n} decimal place${n === 1 ? '' : 's'} allowed.`;
 
 /** TS helper for strict null checks */
 const isDefined = <T,>(v: T | null | undefined): v is T => v !== null && v !== undefined;
@@ -53,9 +58,9 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     min,
     max,
     contentAfter,
+    decimalPlaces = 'automatic',
     placeholder,
     className,
-    // default so the short-circuit check is always safe
     description = '',
   } = props;
 
@@ -83,6 +88,13 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   // Allow negatives only if boundaries allow
   const allowNegative = (isDefined(min) && min < 0) || (isDefined(max) && max < 0);
 
+  // NEW: compute decimal limit (null = unlimited)
+  const decimalLimit: 1 | 2 | null = React.useMemo(() => {
+    if (decimalPlaces === 'one') return 1;
+    if (decimalPlaces === 'two') return 2;
+    return null; // 'automatic'
+  }, [decimalPlaces]);
+
   // DECIMAL sanitizer: one leading '-' (if allowed) + single '.'
   const decimalSanitizer = React.useCallback((s: string): string => {
     let out = s.replace(/[^0-9.-]/g, '');
@@ -104,6 +116,24 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   const lengthMsg = isDefined(maxLength) ? `Maximum length is ${maxLength} characters.` : '';
 
+  // Helpers for decimal limits
+  const getFractionDigits = (val: string): number => {
+    const dot = val.indexOf('.');
+    return dot === -1 ? 0 : Math.max(0, val.length - dot - 1);
+  };
+  const enforceDecimalLimit = React.useCallback(
+    (val: string): { value: string; trimmed: boolean } => {
+      if (decimalLimit === null) return { value: val, trimmed: false };
+      const dot = val.indexOf('.');
+      if (dot === -1) return { value: val, trimmed: false };
+      const whole = val.slice(0, dot + 1);
+      const frac = val.slice(dot + 1);
+      if (frac.length <= decimalLimit) return { value: val, trimmed: false };
+      return { value: whole + frac.slice(0, decimalLimit), trimmed: true };
+    },
+    [decimalLimit]
+  );
+
   // Validation
   const validateText = React.useCallback((val: string): string => {
     if (isRequired && val.trim().length === 0) return REQUIRED_MSG;
@@ -124,13 +154,18 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     if (val.trim().length === 0) return '';
     if (!isNumericString(val)) return INVALID_NUM_MSG;
 
+    // Decimal place check (even if typing handler trimmed, keep this guard)
+    if (decimalLimit !== null && getFractionDigits(val) > decimalLimit) {
+      return decimalLimitMsg(decimalLimit);
+    }
+
     const n = Number(val);
     if (Number.isNaN(n)) return INVALID_NUM_MSG;
 
     if (isDefined(min) && n < min) return rangeMsg(min, max);
-    if (isDefined(max) && n > max) return rangeMsg(max, max);
+    if (isDefined(max) && n > max) return rangeMsg(min, max);
     return '';
-  }, [isRequired, min, max, isNumericString]);
+  }, [isRequired, min, max, isNumericString, decimalLimit]);
 
   const computeError = React.useCallback(
     (val: string) => (isNumber ? validateNumber(val) : validateText(val)),
@@ -146,22 +181,24 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   React.useEffect(() => {
     if (FormMode === 8) {
       const initial = starterValue !== undefined ? toStr(starterValue) : '';
-      const sanitized = isNumber ? decimalSanitizer(initial) : initial;
+      const sanitized0 = isNumber ? decimalSanitizer(initial) : initial;
+      const { value: sanitized, trimmed } = isNumber ? enforceDecimalLimit(sanitized0) : { value: sanitized0, trimmed: false };
       setLocalVal(sanitized);
-      setError('');
+      setError(trimmed && decimalLimit !== null ? decimalLimitMsg(decimalLimit) : '');
       setTouched(false);
       GlobalFormData(id, sanitized);
     } else {
       const existing = FormData ? toStr((FormData as any)[id]) : '';
-      const sanitized = isNumber ? decimalSanitizer(existing) : existing;
+      const sanitized0 = isNumber ? decimalSanitizer(existing) : existing;
+      const { value: sanitized, trimmed } = isNumber ? enforceDecimalLimit(sanitized0) : { value: sanitized0, trimmed: false };
       setLocalVal(sanitized);
-      setError('');
+      setError(trimmed && decimalLimit !== null ? decimalLimitMsg(decimalLimit) : '');
       setTouched(false);
       GlobalFormData(id, sanitized);
     }
     GlobalErrorHandle(id, null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [FormMode, starterValue, id, isNumber, decimalSanitizer]);
+  }, [FormMode, starterValue, id, isNumber, decimalSanitizer, enforceDecimalLimit, decimalLimit]);
 
   // Selection helper for paste (TS-safe)
   const getSelection = (el: HTMLInputElement) => {
@@ -170,7 +207,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return { start, end };
   };
 
-  // TEXT: trim pasted content to fit; show Field-style error if truncated
+  // TEXT: trim pasted content to fit maxLength and show Field-style error if truncated
   const handlePaste: React.ClipboardEventHandler<HTMLInputElement> = (e) => {
     if (isNumber || !isDefined(maxLength)) return;
 
@@ -198,15 +235,42 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     }
   };
 
+  // NUMBER: On paste, enforce decimal limit and show limit error if trimming occurs
+  const handleNumberPaste: React.ClipboardEventHandler<HTMLInputElement> = (e) => {
+    if (!isNumber) return;
+    const pasteText = e.clipboardData.getData('text');
+    if (!pasteText) return;
+
+    // Compose projected string as if paste happens into current selection
+    const input = e.currentTarget;
+    const { start, end } = getSelection(input);
+    const projected = input.value.slice(0, start) + pasteText + input.value.slice(end);
+    const sanitized0 = decimalSanitizer(projected);
+    const { value: limited, trimmed } = enforceDecimalLimit(sanitized0);
+    if (trimmed && decimalLimit !== null) {
+      e.preventDefault();
+      setLocalVal(limited);
+      setError(decimalLimitMsg(decimalLimit));
+    }
+  };
+
   // Local change
   const handleChange: React.ComponentProps<typeof Input>['onChange'] = (_e, data) => {
     const raw = data.value ?? '';
-    const next = isNumber ? decimalSanitizer(raw) : raw;
+    const sanitized0 = isNumber ? decimalSanitizer(raw) : raw;
+    const { value: next, trimmed } = isNumber ? enforceDecimalLimit(sanitized0) : { value: sanitized0, trimmed: false };
+
     setLocalVal(next);
 
     // TEXT: show length error at/over cap; clears when below
     if (!isNumber && isDefined(maxLength) && next.length >= maxLength) {
       setError(lengthMsg);
+      return;
+    }
+
+    // NUMBER: if we trimmed due to decimal limit, surface the error immediately
+    if (isNumber && trimmed && decimalLimit !== null) {
+      setError(decimalLimitMsg(decimalLimit));
       return;
     }
 
@@ -235,13 +299,18 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   const hasError = error !== '';
 
+  // Native step attribute to match decimal policy (helps arrows/increment and mobile keyboards)
+  const stepAttr = isNumber
+    ? (decimalLimit === 1 ? '0.1' : decimalLimit === 2 ? '0.01' : 'any')
+    : undefined;
+
   return (
     <Field
       label={displayName}
       required={isRequired}
       validationMessage={hasError ? error : undefined}
       validationState={hasError ? 'error' : undefined}
-      /* size prop intentionally omitted */
+      /* size intentionally omitted */
     >
       <Input
         id={inputId}
@@ -251,7 +320,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
         value={localVal}
         onChange={handleChange}
         onBlur={handleBlur}
-        onPaste={handlePaste}
+        onPaste={isNumber ? handleNumberPaste : handlePaste}
         disabled={isDisabled}
 
         // TEXT ONLY
@@ -260,12 +329,13 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
         // NUMBER ONLY
         type={isNumber ? 'number' : 'text'}
         inputMode={isNumber ? 'decimal' : undefined}
+        step={stepAttr}
         min={isNumber && isDefined(min) ? min : undefined}
         max={isNumber && isDefined(max) ? max : undefined}
         contentAfter={after}
       />
 
-      {/* NEW: description below input (short-circuit, strict equality) */}
+      {/* Description under the input */}
       {description !== '' && <div className="descriptionText">{description}</div>}
     </Field>
   );
