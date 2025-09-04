@@ -1,3 +1,46 @@
+/**
+ * SingleLineComponent.tsx
+ *
+ * USAGE
+ * -----
+ * TEXT mode (default):
+ *   <SingleLineComponent
+ *     id="title"                     // REQUIRED
+ *     displayName="Title"            // REQUIRED
+ *     maxLength={120}                // OPTIONAL (caps characters; shows error at/over cap)
+ *     isRequired={true}              // OPTIONAL
+ *     disabled={false}               // OPTIONAL
+ *     starterValue="Prefilled text"  // OPTIONAL (used in New mode)
+ *     placeholder="Enter title"      // OPTIONAL
+ *     description="Shown under input as helper text" // OPTIONAL
+ *     className="w-full"             // OPTIONAL
+ *   />
+ *
+ * NUMBER mode:
+ *   <SingleLineComponent
+ *     id="discount"                  // REQUIRED
+ *     displayName="Discount"         // REQUIRED
+ *     type="number"                  // REQUIRED for number mode
+ *     min={0}                        // OPTIONAL (inclusive)
+ *     max={100}                      // OPTIONAL (inclusive)
+ *     decimalPlaces="two"            // OPTIONAL: 'automatic' | 'one' | 'two' (default 'automatic')
+ *     contentAfter="percentage"      // OPTIONAL: renders '%' suffix
+ *     isRequired={true}              // OPTIONAL
+ *     disabled={false}               // OPTIONAL
+ *     starterValue={12.5}            // OPTIONAL (used in New mode)
+ *     placeholder="e.g. 12.5"        // OPTIONAL
+ *     description="0 - 100, up to 2 decimals" // OPTIONAL
+ *     className="w-48"               // OPTIONAL
+ *   />
+ *
+ * NOTES
+ * - New vs Edit prefill is driven by DynamicFormContext (FormMode === 8 means New).
+ * - Value + error are pushed to the context on BLUR (you can switch to live commit if needed).
+ * - Number mode supports decimals and (optionally) negatives if your min/max allow.
+ * - decimalPlaces trims extra fraction digits while typing/pasting and surfaces a Field error.
+ * - Old integer-only sanitizer is kept commented for reference (avoids TS unused warnings).
+ */
+
 import * as React from 'react';
 import { Field, Input, Text, useId } from '@fluentui/react-components';
 import { DynamicFormContext } from './DynamicFormContext';
