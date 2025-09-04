@@ -7,9 +7,9 @@
  *   <SingleLineComponent
  *     id="title"                     // REQUIRED
  *     displayName="Title"            // REQUIRED
- *     maxLength={120}                // OPTIONAL (caps characters; shows error at/over cap)
+ *     maxLength={120}                // OPTIONAL
  *     isRequired={true}              // OPTIONAL
- *     disabled={false}               // OPTIONAL
+ *     disabled={false}               // OPTIONAL (will be overridden by AllDisabledFields / perms)
  *     starterValue="Prefilled text"  // OPTIONAL (used in New mode)
  *     placeholder="Enter title"      // OPTIONAL
  *     description="Shown under input as helper text" // OPTIONAL
@@ -26,7 +26,7 @@
  *     decimalPlaces="two"            // OPTIONAL: 'automatic' | 'one' | 'two' (default 'automatic')
  *     contentAfter="percentage"      // OPTIONAL: renders '%' suffix
  *     isRequired={true}              // OPTIONAL
- *     disabled={false}               // OPTIONAL
+ *     disabled={false}               // OPTIONAL (will be overridden by AllDisabledFields / perms)
  *     starterValue={12.5}            // OPTIONAL (used in New mode)
  *     placeholder="e.g. 12.5"        // OPTIONAL
  *     description="0 - 100, up to 2 decimals" // OPTIONAL
@@ -34,11 +34,12 @@
  *   />
  *
  * NOTES
- * - New vs Edit prefill uses DynamicFormContext (FormMode === 8 means New).
- * - Value + error are pushed to the context on BLUR (opt-in to live commit in handleChange).
- * - Number mode supports decimals and (optionally) negatives if your min/max allow.
+ * - Prefill (value seed + error clear) runs ONCE on mount.
+ * - Permissions are recomputed reactively when context values change.
+ * - Number mode supports decimals and (optionally) negatives (if min/max allow).
  * - decimalPlaces trims extra fraction digits while typing/pasting and surfaces a Field error.
- * - Old integer-only sanitizer is kept commented for reference (avoids TS unused warnings).
+ * - Old integer-only sanitizer is kept commented for reference.
+ * - Hiding logic for `AllHiddenFields` / `visibleOnly` is included but COMMENTED OUT (enable when ready).
  */
 
 import * as React from 'react';
@@ -62,14 +63,10 @@ export interface SingleLineFieldProps {
   min?: number;
   max?: number;
   contentAfter?: 'percentage';
-
-  /** Decimal places policy for number fields */
   decimalPlaces?: 'automatic' | 'one' | 'two';
 
   placeholder?: string;
   className?: string;
-
-  /** Helper text rendered under the input */
   description?: string;
 }
 
@@ -90,6 +87,9 @@ const decimalLimitMsg = (n: 1 | 2) =>
 /** TS helper for strict null checks */
 const isDefined = <T,>(v: T | null | undefined): v is T => v !== null && v !== undefined;
 
+/** String normalizer for case/spacing-insensitive comparisons */
+const norm = (s: unknown): string => String(s ?? '').trim().toLowerCase();
+
 export default function SingleLineComponent(props: SingleLineFieldProps): JSX.Element {
   const {
     id,
@@ -108,8 +108,17 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     description = '',
   } = props;
 
-  const { FormData, GlobalFormData, FormMode, GlobalErrorHandle } =
-    React.useContext(DynamicFormContext);
+  const {
+    FormData,
+    GlobalFormData,
+    FormMode,
+    GlobalErrorHandle,
+    // NEW contexts used for permissions / visibility
+    AllDisabledFields,
+    AllHiddenFields,
+    userBasedPerms,
+    curUserInfo,
+  } = React.useContext(DynamicFormContext);
 
   const inputId = useId('input');
 
@@ -121,6 +130,9 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   // Mirror flags (reactive to prop changes)
   const [isRequired, setIsRequired] = React.useState<boolean>(!!requiredProp);
   const [isDisabled, setIsDisabled] = React.useState<boolean>(!!disabledProp);
+  // Optional: keep a local hidden flag (not applied yet; left here for future use)
+  // const [isHidden, setIsHidden] = React.useState<boolean>(false);
+
   React.useEffect(() => {
     setIsRequired(!!requiredProp);
     setIsDisabled(!!disabledProp);
@@ -222,7 +234,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     GlobalFormData(id, val);
   }, [GlobalErrorHandle, GlobalFormData, id]);
 
-  // Prefill ONCE on mount only (empty dependency array as requested)
+  // Prefill ONCE on mount only (requested earlier)
   React.useEffect(() => {
     if (FormMode === 8) {
       const initial = starterValue !== undefined ? toStr(starterValue) : '';
@@ -248,6 +260,108 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     GlobalErrorHandle(id, null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // run once
+
+  /**
+   * PERMISSIONS EFFECT (reactive):
+   * - AllDisabledFields → always disable (highest priority).
+   * - userBasedPerms:
+   *    - Find groupName(s); if current user is in that SP group:
+   *        - editableOnly contains this displayName → enabled; else disabled.
+   *        - visibleOnly contains this displayName → visible; else hidden (NOT APPLIED YET; see comments below).
+   *    - If user not in group → disabled.
+   * - AllHiddenFields (NOT APPLIED YET; see comments below).
+   */
+  React.useEffect(() => {
+    // Normalize component field name once
+    const fieldNameNorm = norm(displayName);
+
+    // 1) AllDisabledFields (highest precedence)
+    const disabledByAllDisabled =
+      Array.isArray(AllDisabledFields) &&
+      AllDisabledFields.some((n: unknown) => norm(n) === fieldNameNorm);
+
+    if (disabledByAllDisabled) {
+      setIsDisabled(true);
+      return; // no further checks; precedence applies
+    }
+
+    // 2) Determine user membership in the configured group(s)
+    const groupsArray: any[] = Array.isArray(curUserInfo?.SPGroups) ? curUserInfo.SPGroups : [];
+    const userGroupTitles = new Set(
+      groupsArray
+        .map((g) => norm((g && (g.title ?? g.Title)) as unknown as string))
+        .filter((s) => s !== '')
+    );
+
+    // userBasedPerms expected shape per screenshot
+    const entries: any[] = Array.isArray(userBasedPerms?.groupBased)
+      ? userBasedPerms.groupBased
+      : [];
+
+    // Default policy if nothing matches: disabled
+    let disabledByPerms = true;
+    // let hiddenByPerms = false; // default visible for now
+
+    for (const entry of entries) {
+      const src = entry?.groupSource;
+      if (!src) continue;
+
+      const groupName: string = src.groupName as string;
+      const editableOnly: unknown[] = Array.isArray(src.editableOnly) ? src.editableOnly : [];
+      const visibleOnly: unknown[] = Array.isArray(src.visibleOnly) ? src.visibleOnly : [];
+
+      // Is current user in this group?
+      const inGroup = userGroupTitles.has(norm(groupName));
+
+      if (!inGroup) {
+        // If user is not in this group, this rule implies disabled; continue scanning other rules.
+        // disabledByPerms remains true (disabled) unless another matching group enables it.
+        continue;
+      }
+
+      // We have a group match; inspect field permissions
+      const editable = editableOnly.some((n) => norm(n) === fieldNameNorm);
+      const visible = visibleOnly.some((n) => norm(n) === fieldNameNorm);
+
+      // EDITABILITY: if any matching group lists the field in editableOnly → enable
+      if (editable) {
+        disabledByPerms = false;
+      } else {
+        // keep disabled unless another matching group sets editable
+        disabledByPerms = disabledByPerms && true;
+      }
+
+      // VISIBILITY (NOT APPLIED YET):
+      // If any matching group lists the field in visibleOnly → visible; otherwise hidden.
+      // When you're ready to enable this logic, un-comment the next lines
+      // and wire the result to state and render.
+      //
+      // if (visible) {
+      //   hiddenByPerms = false;
+      // } else {
+      //   hiddenByPerms = true;
+      // }
+    }
+
+    // 3) AllHiddenFields (NOT APPLIED YET). Example of how it would work:
+    // const hiddenByAllHidden =
+    //   Array.isArray(AllHiddenFields) &&
+    //   AllHiddenFields.some((n: unknown) => norm(n) === fieldNameNorm);
+    //
+    // const finalHidden = hiddenByAllHidden || hiddenByPerms;
+    // setIsHidden(finalHidden);
+
+    // Combine with the prop-level disabled flag
+    const finalDisabled = !!disabledProp || disabledByPerms;
+    setIsDisabled(finalDisabled);
+  }, [
+    displayName,
+    disabledProp,
+    AllDisabledFields,
+    AllHiddenFields,
+    userBasedPerms,
+    curUserInfo,
+  ]);
 
   // Selection helper for paste (TS-safe)
   const getSelection = (el: HTMLInputElement) => {
@@ -353,6 +467,9 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const stepAttr = isNumber
     ? (decimalLimit === 1 ? '0.1' : decimalLimit === 2 ? '0.01' : 'any')
     : undefined;
+
+  // If/when you enable hiding, render nothing when hidden:
+  // if (isHidden) return null;
 
   return (
     <Field
