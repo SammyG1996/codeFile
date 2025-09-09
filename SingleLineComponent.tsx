@@ -1,48 +1,53 @@
 /**
  * SingleLineComponent.tsx
  *
- * Purpose:
- * - Single-line input that can behave as text or number.
- * - Local state for value + error; pushes value/error to DynamicFormContext on BLUR.
- * - Supports: required, disabled, maxLength (text), min/max (number), decimalPlaces,
- *   optional "%" suffix, helper description, and a "submitting" flag from props.
- *
- * Notes for reviewers:
- * - The "submitting" prop is a simple boolean that disables the field and is passed to <Field>.
- * - Prefill runs on mount and whenever "submitting" changes; no GlobalFormData writes happen there.
- * - Value is validated/sanitized on change; final commit is on blur (can be made live if needed).
+ * Summary
+ * - Single-line input using Fluent UI v9 (<Field> + <Input>).
+ * - TEXT mode (default) or NUMBER mode (when type==='number').
+ * - Local state for value + error. Commits value/error to DynamicFormContext on BLUR.
+ * - Validations:
+ *   • required (text/number)
+ *   • text maxLength (and error when user reaches the cap)
+ *   • number format (including ".5" and "-3.2" if negatives allowed)
+ *   • min/max range (inclusive)
+ *   • decimalPlaces limit: 'automatic' (no cap), 'one', or 'two'
+ * - UI extras:
+ *   • optional '%' suffix for number fields (contentAfter === 'percentage')
+ *   • optional helper description under the input
+ *   • submitting prop disables the input and is forwarded to <Field> (for styling/hooks)
  */
 
 import * as React from 'react';
 import { Field, Input, Text, useId } from '@fluentui/react-components';
 import { DynamicFormContext } from './DynamicFormContext';
 
+/** Component props (keep names consistent with the rest of your form system) */
 export interface SingleLineFieldProps {
-  id: string;
-  displayName: string;
+  id: string;                                   // key used in outer form state
+  displayName: string;                          // label text
 
-  starterValue?: string | number;                 // initial value for New mode or fallback
-  isRequired?: boolean;                           // marks the field required
-  disabled?: boolean;                             // externally disables the field
+  starterValue?: string | number;               // seed value in New mode (FormMode === 8)
+  isRequired?: boolean;                         // required flag
+  disabled?: boolean;                           // external disable flag
 
   // TEXT ONLY
-  maxLength?: number;                             // hard cap for character count
+  maxLength?: number;                           // hard character cap
 
   // NUMBER ONLY
-  type?: 'number';                                // set to 'number' to enable numeric mode
-  min?: number;                                   // inclusive minimum
-  max?: number;                                   // inclusive maximum
-  contentAfter?: 'percentage';                    // renders "%" suffix if 'percentage'
-  decimalPlaces?: 'automatic' | 'one' | 'two';    // decimal precision policy; default 'automatic'
+  type?: 'number';                              // enable number behavior when set
+  min?: number;                                 // inclusive min
+  max?: number;                                 // inclusive max
+  contentAfter?: 'percentage';                  // render '%' suffix when set
+  decimalPlaces?: 'automatic' | 'one' | 'two';  // fraction digit policy (default 'automatic')
 
-  placeholder?: string;
-  className?: string;
-  description?: string;                           // helper text under the field
+  placeholder?: string;                         // input placeholder
+  className?: string;                           // custom class for Input
+  description?: string;                         // helper text rendered under the field
 
-  submitting?: boolean;                           // when true, disables input and marks Field as submitting
+  submitting?: boolean;                         // when true, disable input + forward to <Field submitting>
 }
 
-/* Messages shown via <Field validationMessage> */
+/** Messages presented via <Field validationMessage> */
 const REQUIRED_MSG = 'This is a required field and cannot be blank!';
 const INVALID_NUM_MSG = 'Please enter valid numeric value!';
 const rangeMsg = (min?: number, max?: number) =>
@@ -56,7 +61,7 @@ const rangeMsg = (min?: number, max?: number) =>
 const decimalLimitMsg = (n: 1 | 2) =>
   `Maximum ${n} decimal place${n === 1 ? '' : 's'} allowed.`;
 
-/* Small helper for strict null checks */
+/** Narrow helper (strict null checks) */
 const isDefined = <T,>(v: T | null | undefined): v is T => v !== null && v !== undefined;
 
 export default function SingleLineComponent(props: SingleLineFieldProps): JSX.Element {
@@ -77,40 +82,54 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     description = '',
   } = props;
 
+  // form context (commit value/error on BLUR; prefill reads from FormData)
   const { FormData, GlobalFormData, FormMode, GlobalErrorHandle } =
     React.useContext(DynamicFormContext);
 
-  /* Expose submitting to Field and to local disable logic */
+  // submitting flag from props (not from context)
   const isSubmitting = !!props.submitting;
 
+  // generate a stable id for aria attributes, suffix id, etc.
   const inputId = useId('input');
 
-  /* Local state for controlled input + errors */
+  /* -------------------------
+   * Local component state
+   * -------------------------
+   * - localVal: the controlled input value
+   * - error: current validation message (shown by <Field>)
+   * - touched: whether the user has left the field at least once (drives text required-on-blur)
+   * - isRequired / isDisabled mirror props and react when props change
+   */
   const [localVal, setLocalVal] = React.useState<string>('');
   const [error, setError] = React.useState<string>('');
   const [touched, setTouched] = React.useState<boolean>(false);
-
-  /* Mirror "required" and "disabled" props; keep them reactive */
   const [isRequired, setIsRequired] = React.useState<boolean>(!!requiredProp);
   const [isDisabled, setIsDisabled] = React.useState<boolean>(!!disabledProp);
+
+  // keep required/disabled in sync with props; also disable when submitting=true
   React.useEffect(() => {
     setIsRequired(!!requiredProp);
-    setIsDisabled(!!disabledProp);
-  }, [requiredProp, disabledProp]);
+    setIsDisabled(!!disabledProp || isSubmitting);
+  }, [requiredProp, disabledProp, isSubmitting]);
 
-  /* Derived flags for number behavior */
+  /* -------------------------
+   * Mode & number helpers
+   * -------------------------
+   */
   const isNumber = type === 'number';
   const toStr = (v: unknown) => (v === null || v === undefined ? '' : String(v));
+
+  // allow a leading '-' only if any bound permits negatives
   const allowNegative = (isDefined(min) && min < 0) || (isDefined(max) && max < 0);
 
-  /* Decimal policy: null means "no explicit limit" (automatic) */
+  // decimalPlaces policy: null means unlimited ("automatic")
   const decimalLimit: 1 | 2 | null = React.useMemo(() => {
     if (decimalPlaces === 'one') return 1;
     if (decimalPlaces === 'two') return 2;
     return null;
   }, [decimalPlaces]);
 
-  /* Keep only digits, one leading '-', and a single '.'; trim extra '-' or '.' occurrences */
+  // constrain to digits + at most one leading '-' + a single '.'
   const decimalSanitizer = React.useCallback((s: string): string => {
     let out = s.replace(/[^0-9.-]/g, '');
     if (!allowNegative) {
@@ -126,19 +145,19 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return out;
   }, [allowNegative]);
 
-  /* Legacy integer-only sanitizer kept here for reference; not used anymore */
+  // legacy integer-only sanitizer (reference only; not used anymore)
   // const digitsOnly = (s: string) => s.replace(/[^\d]/g, '');
 
-  /* Pre-built length message for text mode */
+  // precompute the text length message so we can reuse it in handlers
   const lengthMsg = isDefined(maxLength) ? `Maximum length is ${maxLength} characters.` : '';
 
-  /* Utility for counting fractional digits in a string number */
+  // count fractional digits in a numeric string
   const getFractionDigits = (val: string): number => {
     const dot = val.indexOf('.');
     return dot === -1 ? 0 : Math.max(0, val.length - dot - 1);
   };
 
-  /* Enforce decimalPlaces policy by trimming extra fractional digits if needed */
+  // enforce decimalPlaces by trimming extra fractional digits (returns the trimmed value + flag)
   const enforceDecimalLimit = React.useCallback(
     (val: string): { value: string; trimmed: boolean } => {
       if (decimalLimit === null) return { value: val, trimmed: false };
@@ -152,13 +171,18 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     [decimalLimit]
   );
 
-  /* Text validation: just required check here */
+  /* -------------------------
+   * Validation
+   * -------------------------
+   * - TEXT: only required check here (length is enforced by attribute and paste handling).
+   * - NUMBER: format, decimalPlaces, min/max.
+   */
   const validateText = React.useCallback((val: string): string => {
     if (isRequired && val.trim().length === 0) return REQUIRED_MSG;
     return '';
   }, [isRequired]);
 
-  /* Allow ".5" or "0.5" and optional leading "-" if negatives allowed */
+  // numeric grammar allows "12", "12.", "0.5", ".5" and optional leading '-' based on allowNegative
   const isNumericString = React.useCallback((val: string): boolean => {
     if (!val || val.trim().length === 0) return false;
     const re = allowNegative
@@ -167,7 +191,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return re.test(val);
   }, [allowNegative]);
 
-  /* Number validation: required, format, decimal places, min/max */
   const validateNumber = React.useCallback((val: string): string => {
     if (isRequired && val.trim().length === 0) return REQUIRED_MSG;
     if (val.trim().length === 0) return '';
@@ -185,25 +208,32 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return '';
   }, [isRequired, min, max, isNumericString, decimalLimit]);
 
-  /* Choose the validator based on mode */
+  // pick the correct validator for the current mode
   const computeError = React.useCallback(
     (val: string) => (isNumber ? validateNumber(val) : validateText(val)),
     [isNumber, validateNumber, validateText]
   );
 
-  /* Push value + error to outer form state (called on BLUR) */
+  /* -------------------------
+   * Commit to outer state (BLUR)
+   * -------------------------
+   * - On blur we push both value and error to the form context.
+   * - Prefill effect deliberately does NOT write to GlobalFormData (per your pattern).
+   */
   const commitValue = React.useCallback((val: string, err: string) => {
     GlobalErrorHandle(id, err ? err : null);
     GlobalFormData(id, val);
   }, [GlobalErrorHandle, GlobalFormData, id]);
 
-  /**
-   * Prefill:
-   * - Runs on mount and whenever props.submitting changes.
-   * - Reads initial value from starterValue (New) or FormData[id] (Edit).
-   * - Applies number sanitization and decimal trimming for number mode.
-   * - Does NOT write to GlobalFormData here.
-   * - Clears existing error, and disables input if submitting is true.
+  /* -------------------------
+   * Prefill effect (runs on mount and when props.submitting toggles)
+   * -------------------------
+   * - New mode (FormMode === 8): seed from starterValue.
+   * - Edit mode: seed from FormData[id].
+   * - Sanitize for number mode and enforce decimalPlaces early.
+   * - Clear any existing error in context.
+   * - Do NOT write GlobalFormData here.
+   * - Also: if submitting is true, the separate effect above already disabled the field.
    */
   React.useEffect(() => {
     if (FormMode === 8) {
@@ -226,22 +256,23 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       setTouched(false);
     }
 
-    if (props.submitting === true) {
-      setIsDisabled(true);
-    }
-
     GlobalErrorHandle(id, null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.submitting]);
+  }, [props.submitting]); // re-run when submitting toggles, per requirement
 
-  /* Selection positions for paste handling */
+  /* -------------------------
+   * Handlers
+   * -------------------------
+   */
+
+  // selection utility for paste logic (keeps TS happy with null positions)
   const getSelection = (el: HTMLInputElement) => {
     const start = el.selectionStart ?? el.value.length;
     const end = el.selectionEnd ?? el.value.length;
     return { start, end };
   };
 
-  /* TEXT paste: trim to fit maxLength and surface the length error if we had to cut */
+  // TEXT paste: trim to fit maxLength and show length error if we cut content
   const handlePaste: React.ClipboardEventHandler<HTMLInputElement> = (e) => {
     if (isNumber || !isDefined(maxLength)) return;
 
@@ -269,7 +300,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     }
   };
 
-  /* NUMBER paste: sanitize, enforce decimal limit, surface limit error if we trimmed */
+  // NUMBER paste: sanitize and enforce decimal limit; if we trimmed, surface the limit error
   const handleNumberPaste: React.ClipboardEventHandler<HTMLInputElement> = (e) => {
     if (!isNumber) return;
     const pasteText = e.clipboardData.getData('text');
@@ -287,7 +318,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     }
   };
 
-  /* onChange: keep local value in sync, raise immediate errors when useful */
+  // onChange: keep local value in sync; raise immediate errors that help user correct input early
   const handleChange: React.ComponentProps<typeof Input>['onChange'] = (_e, data) => {
     const raw = data.value ?? '';
     const sanitized0 = isNumber ? decimalSanitizer(raw) : raw;
@@ -297,24 +328,27 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
     setLocalVal(next);
 
+    // TEXT: show error when user reaches the cap (they can't type past maxLength anyway)
     if (!isNumber && isDefined(maxLength) && next.length >= maxLength) {
       setError(lengthMsg);
       return;
     }
 
+    // NUMBER: if we trimmed due to decimalPlaces, show that error immediately
     if (isNumber && trimmed && decimalLimit !== null) {
       setError(decimalLimitMsg(decimalLimit));
       return;
     }
 
+    // otherwise, compute the current error
     const nextErr = isNumber ? validateNumber(next) : (touched ? validateText(next) : '');
     setError(nextErr);
 
-    // If you want live commits instead of blur-only, uncomment:
+    // If you prefer live commits, uncomment:
     // commitValue(next, nextErr);
   };
 
-  /* onBlur: final validation + commit to outer state */
+  // onBlur: final validation + commit to outer form state
   const handleBlur: React.FocusEventHandler<HTMLInputElement> = () => {
     setTouched(true);
     const err =
@@ -325,19 +359,24 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     commitValue(localVal, err);
   };
 
-  /* Optional suffix when contentAfter === 'percentage' */
+  /* -------------------------
+   * Render
+   * -------------------------
+   */
+
+  // optional suffix element (kept small and semantic)
   const after = isNumber && contentAfter === 'percentage'
     ? <Text size={400} id={`${inputId}Per`}>%</Text>
     : undefined;
 
   const hasError = error !== '';
 
-  /* Step attribute aligns browser UI with our decimal policy (e.g., iOS numeric keypad) */
+  // align the native step with our decimal policy (helps browsers & mobile keyboards)
   const stepAttr = isNumber
     ? (decimalLimit === 1 ? '0.1' : decimalLimit === 2 ? '0.01' : 'any')
     : undefined;
 
-  /* Allow custom 'submitting' prop on <Field> by casting */
+  // allow custom 'submitting' prop on <Field> by casting (not part of official Field props)
   const FieldAny = Field as unknown as React.ComponentType<any>;
 
   return (
@@ -347,7 +386,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       validationMessage={hasError ? error : undefined}
       validationState={hasError ? 'error' : undefined}
       submitting={isSubmitting}
-      /* no size prop to keep default sizing */
     >
       <Input
         id={inputId}
@@ -372,7 +410,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
         contentAfter={after}
       />
 
-      {/* Helper text below the input */}
+      {/* helper/description under the input (short-circuit pattern) */}
       {description !== '' && <div className="descriptionText">{description}</div>}
     </FieldAny>
   );
