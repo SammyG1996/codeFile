@@ -4,22 +4,48 @@
  * Summary
  * - Single-line input using Fluent UI v9 (<Field> + <Input>).
  * - TEXT mode (default) or NUMBER mode (when type==='number').
- * - Local state for value + error. Commits value to DynamicFormContext on BLUR.
+ * - Local state for value + error. Commits value/error to DynamicFormContext on BLUR.
  * - Validations:
  *   • required (text/number)
  *   • text maxLength (and error when user reaches the cap)
  *   • number format (".5", "12.", negatives if allowed)
  *   • min/max range (inclusive)
- *   • decimalPlaces: 'automatic' (no cap), 'one', or 'two'
+ *   • decimalPlaces limit: 'automatic' (no cap), 'one', or 'two'
  * - UI extras:
  *   • optional '%' suffix for number fields (contentAfter === 'percentage')
- *   • optional helper description under the field
+ *   • optional helper description under the input
  *   • submitting prop disables the input and is forwarded to <Field> for styling
  * - "disabled" is NOT a prop. It’s derived from DynamicFormContext.
  *
- * Note on step:
- * - We do not expose a step prop. The native input always receives step="any".
- *   Decimal precision is enforced by our own validation/trim logic.
+ * Example usage (TypeScript/JSX):
+ *
+ * // TEXT mode
+ * <SingleLineComponent
+ *   id="title"                     // string (required)
+ *   displayName="Title"            // string (required)
+ *   starterValue="Initial value"   // string | number (optional)
+ *   isRequired={true}              // boolean (optional)
+ *   maxLength={120}                // number (optional; TEXT only)
+ *   placeholder="Enter title"      // string (optional)
+ *   description="Short helper text under the field" // string (optional)
+ *   submitting={isSubmitting}      // boolean (optional)
+ * />
+ *
+ * // NUMBER mode
+ * <SingleLineComponent
+ *   id="discount"                  // string (required)
+ *   displayName="Discount"         // string (required)
+ *   type="number"                  // 'number' (required for number mode)
+ *   min={0}                        // number (optional)
+ *   max={100}                      // number (optional)
+ *   decimalPlaces="two"            // 'automatic' | 'one' | 'two' (optional)
+ *   contentAfter="percentage"      // shows '%' to the right (optional)
+ *   starterValue={12.5}            // number (optional)
+ *   placeholder="e.g. 12.5"        // string (optional)
+ *   description="0–100, up to 2 decimals" // string (optional)
+ *   submitting={isSubmitting}      // boolean (optional)
+ * />
+ * 
  */
 
 import * as React from 'react';
