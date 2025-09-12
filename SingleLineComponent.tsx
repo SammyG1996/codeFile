@@ -11,11 +11,11 @@
  *   • number format (".5", "12.", negatives if allowed)
  *   • min/max range (inclusive)
  *   • decimalPlaces limit: 'automatic' (no cap), 'one', or 'two'
- * - Submitting and context flags control disabled; display form (mode 4) is always disabled.
- * - AllDisabledFields (context) → disable this field when it lists the field's displayName.
- * - AllHiddenFields (context) → hide the entire wrapper <div>.
- * - Live commit: every time local value changes we also call GlobalFormData
- *   (and convert to number/null in number mode). Blur still validates & commits.
+ * - Disabled comes from: Display mode (FormMode===4) OR context disabled flags
+ *   OR AllDisabledFields list OR props.submitting.
+ * - Hidden comes from: AllHiddenFields list (we hide the wrapper <div>).
+ * - Live commit: every time we change local value we ALSO call GlobalFormData
+ *   (number -> real number or null; text -> string). Blur still validates & commits.
  *
  * Example usage
  * // TEXT mode
@@ -71,7 +71,7 @@ export interface SingleLineFieldProps {
   className?: string;
   description?: string;
 
-  submitting?: boolean; // used only to compute disabled; not forwarded to Field
+  submitting?: boolean; // used only to compute disabled; not forwarded to <Field>
 }
 
 const REQUIRED_MSG = 'This is a required field and cannot be blank!';
@@ -89,14 +89,45 @@ const decimalLimitMsg = (n: 1 | 2) =>
 
 const isDefined = <T,>(v: T | null | undefined): v is T => v !== null && v !== undefined;
 
+/* Normalized membership check for context lists.
+   Accepts: string[], Set<string>, { [name]: truthy }, "a,b,c" string. */
+const toBool = (v: unknown): boolean => !!v;
+const isListed = (bag: unknown, name: string): boolean => {
+  const needle = name.trim().toLowerCase();
+  if (!bag) return false;
+
+  if (Array.isArray(bag)) {
+    return bag.some(v => String(v).trim().toLowerCase() === needle);
+  }
+
+  if ((bag as Set<unknown>).has instanceof Function) {
+    for (const v of bag as Set<unknown>) {
+      if (String(v).trim().toLowerCase() === needle) return true;
+    }
+    return false;
+  }
+
+  if (typeof bag === 'string') {
+    return bag.split(',').map(s => s.trim().toLowerCase()).includes(needle);
+  }
+
+  if (typeof bag === 'object') {
+    for (const [k, v] of Object.entries(bag as Record<string, unknown>)) {
+      if (k.trim().toLowerCase() === needle && toBool(v)) return true;
+    }
+    return false;
+  }
+
+  return false;
+};
+
 interface DFMinimal {
   FormData?: Record<string, unknown>;
   FormMode?: number;
   GlobalFormData: (id: string, value: unknown) => void;
   GlobalErrorHandle: (id: string, error: string | null) => void;
-  AllDisabledFields?: string[];
-  AllHiddenFields?: string[];
-  // plus any other fields the app might put here…
+  // We also read possibly-present: isDisabled/disabled/formDisabled/Disabled
+  // and AllDisabledFields / AllHiddenFields (any of the shapes handled by isListed)
 }
 
 export default function SingleLineComponent(props: SingleLineFieldProps): JSX.Element {
@@ -117,27 +148,22 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     submitting,
   } = props;
 
-  // Context
+  // Full form context
   const formCtx = React.useContext(DynamicFormContext) as unknown as (DFMinimal & Record<string, unknown>);
-  const {
-    FormData,
-    FormMode,
-    GlobalFormData,
-    GlobalErrorHandle,
-    AllDisabledFields = [],
-    AllHiddenFields = [],
-  } = formCtx;
+  const { FormData, FormMode, GlobalFormData, GlobalErrorHandle } = formCtx;
 
-  // Derived flags
   const isDisplayForm = FormMode === 4;
   const isNumber = type === 'number';
-  const fromContextDisabled =
-    !!(formCtx.isDisabled ?? formCtx.disabled ?? formCtx.formDisabled ?? (formCtx as any).Disabled); // eslint-disable-line @typescript-eslint/no-explicit-any
 
-  // Controlled UI flags
+  // Possible context-level disabled flags (normalize to boolean)
+  const disabledFromCtx = !!(
+    (formCtx as any).isDisabled ?? (formCtx as any).disabled ?? (formCtx as any).formDisabled ?? (formCtx as any).Disabled
+  ); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+  // UI flags (controlled)
   const [isRequired, setIsRequired] = React.useState<boolean>(!!requiredProp);
   const [isDisabled, setIsDisabled] = React.useState<boolean>(
-    isDisplayForm || fromContextDisabled || !!submitting
+    isDisplayForm || disabledFromCtx || !!submitting
   );
   const [isHidden, setIsHidden] = React.useState<boolean>(false);
 
@@ -146,10 +172,9 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const [error, _setError] = React.useState<string>('');
   const [touched, setTouched] = React.useState<boolean>(false);
 
-  // IDs
   const inputId = useId('input');
 
-  // —— helpers
+  /* ---------- number helpers ---------- */
 
   const valueToString = (v: unknown) => (v === null || v === undefined ? '' : String(v));
   const allowNegative = (isDefined(min) && min < 0) || (isDefined(max) && max < 0);
@@ -180,7 +205,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const fractionDigits = (val: string): number => {
     const dot = val.indexOf('.');
     return dot === -1 ? 0 : Math.max(0, val.length - dot - 1);
-    };
+  };
 
   const applyDecimalLimit = React.useCallback(
     (val: string): { value: string; trimmed: boolean } => {
@@ -194,6 +219,8 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     },
     [decimalLimit]
   );
+
+  /* ---------- validation ---------- */
 
   const validateText = React.useCallback((val: string): string => {
     if (isRequired && val.trim().length === 0) return REQUIRED_MSG;
@@ -230,13 +257,15 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     [isNumber, validateNumber, validateText]
   );
 
-  // Keep Field error + Global error in sync
+  /* ---------- keep Field error + Global error in sync ---------- */
+
   const setErrorBoth = React.useCallback((msg: string) => {
     _setError(msg);
     GlobalErrorHandle(id, msg === '' ? null : msg);
   }, [GlobalErrorHandle, id]);
 
-  // Live commit helper: updates local value AND writes to GlobalFormData
+  /* ---------- live commit helper (local + GlobalFormData) ---------- */
+
   const setValueBoth = React.useCallback((raw: string) => {
     _setLocalVal(raw);
     if (isNumber) {
@@ -252,49 +281,33 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     }
   }, [GlobalFormData, id, isNumber]);
 
-  // Commit helper (also updates local for consistency)
+  /* ---------- commit helper (also updates local) ---------- */
+
   const commitValue = React.useCallback((val: string) => {
     setValueBoth(val);
   }, [setValueBoth]);
 
-  /* -------------------------
-   * EFFECTS
-   * -------------------------
-   */
+  /* ---------- effects ---------- */
 
-  // Mirror basic flags
+  // Mirror "required" only
   React.useEffect(() => {
     setIsRequired(!!requiredProp);
   }, [requiredProp]);
 
-  // Disable / Hide computation
+  // Compute disabled + hidden (no assumptions about the shapes in context)
   React.useEffect(() => {
-    // Display mode (4) is always disabled
     const fromMode = isDisplayForm;
-
-    // Global/context disabled flags
-    const fromCtx = fromContextDisabled;
-
-    // AllDisabledFields overrides (by displayName)
-    const fromList = AllDisabledFields.includes(displayName);
-
-    // submitting disables, but we don't pass it into Field
+    const fromCtx = disabledFromCtx;
     const fromSubmitting = !!submitting;
 
-    setIsDisabled(fromMode || fromCtx || fromList || fromSubmitting);
+    const fromDisabledList = isListed((formCtx as any).AllDisabledFields, displayName); // eslint-disable-line @typescript-eslint/no-explicit-any
+    const fromHiddenList = isListed((formCtx as any).AllHiddenFields, displayName); // eslint-disable-line @typescript-eslint/no-explicit-any
 
-    // Hidden list (by displayName)
-    setIsHidden(AllHiddenFields.includes(displayName));
-  }, [
-    isDisplayForm,
-    fromContextDisabled,
-    AllDisabledFields,
-    AllHiddenFields,
-    displayName,
-    submitting,
-  ]);
+    setIsDisabled(fromMode || fromCtx || fromDisabledList || fromSubmitting);
+    setIsHidden(fromHiddenList);
+  }, [isDisplayForm, disabledFromCtx, formCtx, displayName, submitting]);
 
-  // Prefill once on mount (New vs Edit)
+  // Prefill once on mount (New vs Edit) — DO NOT rerun on submitting
   React.useEffect(() => {
     if (FormMode === 8) {
       const initial = starterValue !== undefined ? valueToString(starterValue) : '';
@@ -318,10 +331,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // initialize once
 
-  /* -------------------------
-   * Handlers
-   * -------------------------
-   */
+  /* ---------- handlers ---------- */
 
   const getSelectionRange = (el: HTMLInputElement) => {
     const start = el.selectionStart ?? el.value.length;
@@ -331,7 +341,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   const handleTextPaste: React.ClipboardEventHandler<HTMLInputElement> = (e) => {
     if (isNumber || !isDefined(maxLength)) return;
-
     const input = e.currentTarget;
     const pasteText = e.clipboardData.getData('text');
     if (!pasteText) return;
@@ -406,10 +415,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     commitValue(localVal); // also refreshes local + GlobalFormData
   };
 
-  /* -------------------------
-   * Render
-   * -------------------------
-   */
+  /* ---------- render ---------- */
 
   const after = isNumber && contentAfter === 'percentage'
     ? <Text size={400} id={`${inputId}Per`}>%</Text>
