@@ -79,9 +79,12 @@ interface DFMinimal {
   FormData?: Record<string, unknown>;
   FormMode?: number;
   GlobalFormData: (id: string, value: unknown) => void;
-  GlobalErrorHandle: (id: string, error: string | null) => void; // API says null clears; we pass undefined casted
-  // optional: isDisabled / disabled / formDisabled / Disabled
-  // optional: AllDisabledFields / AllHiddenFields
+  // We avoid `null` in this component; provider can normalize undefined→null if needed.
+  GlobalErrorHandle: (id: string, error?: string) => void;
+
+  // Optional flags/lists that may or may not exist on the context:
+  // isDisabled / disabled / formDisabled / Disabled
+  // AllDisabledFields / AllHiddenFields
 }
 
 /* ---------- Constants & helpers ---------- */
@@ -90,18 +93,19 @@ const REQUIRED_MSG = 'This is a required field and cannot be blank!';
 const INVALID_NUM_MSG = 'Please enter valid numeric value!';
 
 const rangeMsg = (min?: number, max?: number): string =>
-  (min !== null && min !== undefined) && (max !== null && max !== undefined)
+  (min !== undefined && max !== undefined)
     ? `Value must be between ${min} and ${max}.`
-    : (min !== null && min !== undefined)
+    : (min !== undefined)
       ? `Value must be ≥ ${min}.`
-      : (max !== null && max !== undefined)
+      : (max !== undefined)
         ? `Value must be ≤ ${max}.`
         : '';
 
 const decimalLimitMsg = (n: 1 | 2): string =>
   `Maximum ${n} decimal place${n === 1 ? '' : 's'} allowed.`;
 
-const isDefined = <T,>(v: T | null | undefined): v is T => v !== null && v !== undefined;
+// Treat "defined" as "not undefined" — we never use `null` in this component.
+const isDefined = <T,>(v: T | undefined): v is T => v !== undefined;
 
 /** Safely read a boolean-ish flag from context using several candidate keys. */
 const getCtxFlag = (ctx: Record<string, unknown>, keys: string[]): boolean => {
@@ -173,7 +177,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     submitting,
   } = props;
 
-  // Context
+  // Context (no `any` at call sites)
   const formCtx = React.useContext(DynamicFormContext) as unknown as DFMinimal & Record<string, unknown>;
   const { FormData, FormMode, GlobalFormData, GlobalErrorHandle } = formCtx;
 
@@ -204,13 +208,13 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   /* ---------- number helpers ---------- */
 
-  const valueToString = (v: unknown): string => (v === null || v === undefined ? '' : String(v));
+  const valueToString = (v: unknown): string => (v === undefined ? '' : String(v));
   const allowNegative: boolean = (isDefined(min) && min < 0) || (isDefined(max) && max < 0);
 
-  const decimalLimit: 1 | 2 | null = React.useMemo<1 | 2 | null>(() => {
+  const decimalLimit: 1 | 2 | undefined = React.useMemo<1 | 2 | undefined>(() => {
     if (decimalPlaces === 'one') return 1;
     if (decimalPlaces === 'two') return 2;
-    return null;
+    return undefined;
   }, [decimalPlaces]);
 
   const sanitizeDecimal = React.useCallback((s: string): string => {
@@ -237,7 +241,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   const applyDecimalLimit = React.useCallback(
     (val: string): { value: string; trimmed: boolean } => {
-      if (decimalLimit === null) return { value: val, trimmed: false };
+      if (decimalLimit === undefined) return { value: val, trimmed: false };
       const dot = val.indexOf('.');
       if (dot === -1) return { value: val, trimmed: false };
       const whole = val.slice(0, dot + 1);
@@ -268,7 +272,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     if (val.trim().length === 0) return '';
     if (!isNumericString(val)) return INVALID_NUM_MSG;
 
-    if (decimalLimit !== null && fractionDigits(val) > decimalLimit) {
+    if (decimalLimit !== undefined && fractionDigits(val) > decimalLimit) {
       return decimalLimitMsg(decimalLimit);
     }
 
@@ -288,8 +292,9 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   const setErrorBoth = React.useCallback((msg: string): void => {
     _setError(msg);
-    // API type is (string | null); send undefined and cast to satisfy no-null rule.
-    GlobalErrorHandle(id, (msg === '' ? undefined : msg) as unknown as (string | null));
+    // Clear when empty; pass undefined (provider can coerce to null if required).
+    if (msg === '') GlobalErrorHandle(id, undefined);
+    else GlobalErrorHandle(id, msg);
   }, [GlobalErrorHandle, id]);
 
   /* ---------- live commit helper (local + GlobalFormData) ---------- */
@@ -299,10 +304,10 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     if (isNumber) {
       const trimmed = raw.trim();
       if (trimmed === '') {
-        GlobalFormData(id, undefined as unknown as null); // casted to keep API shape, but avoid literal null
+        GlobalFormData(id, undefined);
       } else {
         const numeric = Number(trimmed);
-        GlobalFormData(id, (Number.isNaN(numeric) ? undefined : numeric) as unknown as (number | null));
+        GlobalFormData(id, Number.isNaN(numeric) ? undefined : numeric);
       }
     } else {
       GlobalFormData(id, raw);
@@ -337,7 +342,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     setIsHidden(fromHiddenList);
   }, [isDisplayForm, disabledFromCtx, formCtx, displayName, submitting]);
 
-  // Prefill once on mount (New vs Edit) — DO NOT rerun on submitting
+  // Prefill once on mount (New vs Edit)
   React.useEffect((): void => {
     if (FormMode === 8) {
       const initial: string = starterValue !== undefined ? valueToString(starterValue) : '';
@@ -345,7 +350,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       const limited = isNumber ? applyDecimalLimit(sanitized0) : { value: sanitized0, trimmed: false };
       setValueBoth(limited.value);
       setTouched(false);
-      setErrorBoth(limited.trimmed && decimalLimit !== null ? decimalLimitMsg(decimalLimit) : '');
+      setErrorBoth(limited.trimmed && decimalLimit !== undefined ? decimalLimitMsg(decimalLimit) : '');
     } else {
       const existingRaw: unknown = FormData ? (FormData as Record<string, unknown>)[id] : '';
       const existing: string = valueToString(existingRaw);
@@ -353,7 +358,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       const limited = isNumber ? applyDecimalLimit(sanitized0) : { value: sanitized0, trimmed: false };
       setValueBoth(limited.value);
       setTouched(false);
-      setErrorBoth(limited.trimmed && decimalLimit !== null ? decimalLimitMsg(decimalLimit) : '');
+      setErrorBoth(limited.trimmed && decimalLimit !== undefined ? decimalLimitMsg(decimalLimit) : '');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // initialize once
@@ -402,7 +407,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     const projected = input.value.slice(0, start) + pasteText + input.value.slice(end);
     const sanitized0 = sanitizeDecimal(projected);
     const { value: limited, trimmed } = applyDecimalLimit(sanitized0);
-    if (trimmed && decimalLimit !== null) {
+    if (trimmed && decimalLimit !== undefined) {
       e.preventDefault();
       setValueBoth(limited); // live commit
       setErrorBoth(decimalLimitMsg(decimalLimit));
@@ -421,7 +426,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       return;
     }
 
-    if (isNumber && limited.trimmed && decimalLimit !== null) {
+    if (isNumber && limited.trimmed && decimalLimit !== undefined) {
       setErrorBoth(decimalLimitMsg(decimalLimit));
       return;
     }
