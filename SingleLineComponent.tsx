@@ -11,9 +11,9 @@
  *   • number format (".5", "12.", negatives if allowed)
  *   • min/max range (inclusive)
  *   • decimalPlaces limit: 'automatic' (no cap), 'one', or 'two'
- * - Disabled comes from: Display mode (FormMode===4) OR context disabled flags
+ * - Disabled derives from: Display mode (FormMode===4) OR context disabled flags
  *   OR AllDisabledFields list OR props.submitting.
- * - Hidden comes from: AllHiddenFields list (we hide the wrapper <div>).
+ * - Hidden derives from: AllHiddenFields list (we hide the wrapper <div>).
  * - Live commit: every time we change local value we ALSO call GlobalFormData
  *   (number -> real number or null; text -> string). Blur still validates & commits.
  *
@@ -76,7 +76,7 @@ export interface SingleLineFieldProps {
 
 const REQUIRED_MSG = 'This is a required field and cannot be blank!';
 const INVALID_NUM_MSG = 'Please enter valid numeric value!';
-const rangeMsg = (min?: number, max?: number) =>
+const rangeMsg = (min?: number, max?: number): string =>
   (min !== null && min !== undefined) && (max !== null && max !== undefined)
     ? `Value must be between ${min} and ${max}.`
     : (min !== null && min !== undefined)
@@ -84,7 +84,7 @@ const rangeMsg = (min?: number, max?: number) =>
       : (max !== null && max !== undefined)
         ? `Value must be ≤ ${max}.`
         : '';
-const decimalLimitMsg = (n: 1 | 2) =>
+const decimalLimitMsg = (n: 1 | 2): string =>
   `Maximum ${n} decimal place${n === 1 ? '' : 's'} allowed.`;
 
 const isDefined = <T,>(v: T | null | undefined): v is T => v !== null && v !== undefined;
@@ -100,6 +100,7 @@ const isListed = (bag: unknown, name: string): boolean => {
     return bag.some(v => String(v).trim().toLowerCase() === needle);
   }
 
+  // Set<string>
   if ((bag as Set<unknown>).has instanceof Function) {
     for (const v of bag as Set<unknown>) {
       if (String(v).trim().toLowerCase() === needle) return true;
@@ -107,10 +108,12 @@ const isListed = (bag: unknown, name: string): boolean => {
     return false;
   }
 
+  // Comma-separated string
   if (typeof bag === 'string') {
     return bag.split(',').map(s => s.trim().toLowerCase()).includes(needle);
   }
 
+  // Object map: { "Field Name": true/1/... }
   if (typeof bag === 'object') {
     for (const [k, v] of Object.entries(bag as Record<string, unknown>)) {
       if (k.trim().toLowerCase() === needle && toBool(v)) return true;
@@ -149,16 +152,16 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   } = props;
 
   // Full form context
-  const formCtx = React.useContext(DynamicFormContext) as unknown as (DFMinimal & Record<string, unknown>);
+  const formCtx = React.useContext(DynamicFormContext) as unknown as (DFMinimal & Record<string, unknown>); // eslint-disable-line @typescript-eslint/no-explicit-any
   const { FormData, FormMode, GlobalFormData, GlobalErrorHandle } = formCtx;
 
   const isDisplayForm = FormMode === 4;
   const isNumber = type === 'number';
 
   // Possible context-level disabled flags (normalize to boolean)
-  const disabledFromCtx = !!(
-    (formCtx as any).isDisabled ?? (formCtx as any).disabled ?? (formCtx as any).formDisabled ?? (formCtx as any).Disabled
-  ); // eslint-disable-line @typescript-eslint/no-explicit-any
+  const disabledFromCtx: boolean = !!(
+    (formCtx as any).isDisabled ?? (formCtx as any).disabled ?? (formCtx as any).formDisabled ?? (formCtx as any).Disabled // eslint-disable-line @typescript-eslint/no-explicit-any
+  );
 
   // UI flags (controlled)
   const [isRequired, setIsRequired] = React.useState<boolean>(!!requiredProp);
@@ -176,10 +179,10 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   /* ---------- number helpers ---------- */
 
-  const valueToString = (v: unknown) => (v === null || v === undefined ? '' : String(v));
-  const allowNegative = (isDefined(min) && min < 0) || (isDefined(max) && max < 0);
+  const valueToString = (v: unknown): string => (v === null || v === undefined ? '' : String(v));
+  const allowNegative: boolean = (isDefined(min) && min < 0) || (isDefined(max) && max < 0);
 
-  const decimalLimit: 1 | 2 | null = React.useMemo(() => {
+  const decimalLimit: 1 | 2 | null = React.useMemo<1 | 2 | null>(() => {
     if (decimalPlaces === 'one') return 1;
     if (decimalPlaces === 'two') return 2;
     return null;
@@ -200,7 +203,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return out;
   }, [allowNegative]);
 
-  const lengthMsg = isDefined(maxLength) ? `Maximum length is ${maxLength} characters.` : '';
+  const lengthMsg: string = isDefined(maxLength) ? `Maximum length is ${maxLength} characters.` : '';
 
   const fractionDigits = (val: string): number => {
     const dot = val.indexOf('.');
@@ -252,29 +255,31 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return '';
   }, [isRequired, min, max, isNumericString, decimalLimit]);
 
-  const validate = React.useCallback(
-    (val: string) => (isNumber ? validateNumber(val) : validateText(val)),
-    [isNumber, validateNumber, validateText]
-  );
+  const validate = React.useCallback((val: string): string => (
+    isNumber ? validateNumber(val) : validateText(val)
+  ), [isNumber, validateNumber, validateText]);
 
   /* ---------- keep Field error + Global error in sync ---------- */
 
-  const setErrorBoth = React.useCallback((msg: string) => {
+  const setErrorBoth = React.useCallback((msg: string): void => {
     _setError(msg);
-    GlobalErrorHandle(id, msg === '' ? null : msg);
+    GlobalErrorHandle(
+      id,
+      msg === '' ? null : msg, // eslint-disable-line unicorn/no-null -- external API uses null to mean "no error"
+    );
   }, [GlobalErrorHandle, id]);
 
   /* ---------- live commit helper (local + GlobalFormData) ---------- */
 
-  const setValueBoth = React.useCallback((raw: string) => {
+  const setValueBoth = React.useCallback((raw: string): void => {
     _setLocalVal(raw);
     if (isNumber) {
       const trimmed = raw.trim();
       if (trimmed === '') {
-        GlobalFormData(id, null);
+        GlobalFormData(id, null); // eslint-disable-line unicorn/no-null -- external API uses null to mean "empty"
       } else {
         const numeric = Number(trimmed);
-        GlobalFormData(id, Number.isNaN(numeric) ? null : numeric);
+        GlobalFormData(id, Number.isNaN(numeric) ? null : numeric); // eslint-disable-line unicorn/no-null -- see above
       }
     } else {
       GlobalFormData(id, raw);
@@ -283,32 +288,32 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   /* ---------- commit helper (also updates local) ---------- */
 
-  const commitValue = React.useCallback((val: string) => {
+  const commitValue = React.useCallback((val: string): void => {
     setValueBoth(val);
   }, [setValueBoth]);
 
   /* ---------- effects ---------- */
 
   // Mirror "required" only
-  React.useEffect(() => {
+  React.useEffect((): void => {
     setIsRequired(!!requiredProp);
   }, [requiredProp]);
 
   // Compute disabled + hidden (no assumptions about the shapes in context)
-  React.useEffect(() => {
+  React.useEffect((): void => {
     const fromMode = isDisplayForm;
     const fromCtx = disabledFromCtx;
     const fromSubmitting = !!submitting;
 
     const fromDisabledList = isListed((formCtx as any).AllDisabledFields, displayName); // eslint-disable-line @typescript-eslint/no-explicit-any
-    const fromHiddenList = isListed((formCtx as any).AllHiddenFields, displayName); // eslint-disable-line @typescript-eslint/no-explicit-any
+    const fromHiddenList   = isListed((formCtx as any).AllHiddenFields,  displayName); // eslint-disable-line @typescript-eslint/no-explicit-any
 
     setIsDisabled(fromMode || fromCtx || fromDisabledList || fromSubmitting);
     setIsHidden(fromHiddenList);
   }, [isDisplayForm, disabledFromCtx, formCtx, displayName, submitting]);
 
   // Prefill once on mount (New vs Edit) — DO NOT rerun on submitting
-  React.useEffect(() => {
+  React.useEffect((): void => {
     if (FormMode === 8) {
       const initial = starterValue !== undefined ? valueToString(starterValue) : '';
       const sanitized0 = isNumber ? sanitizeDecimal(initial) : initial;
@@ -333,13 +338,13 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   /* ---------- handlers ---------- */
 
-  const getSelectionRange = (el: HTMLInputElement) => {
+  const getSelectionRange = (el: HTMLInputElement): { start: number; end: number } => {
     const start = el.selectionStart ?? el.value.length;
     const end = el.selectionEnd ?? el.value.length;
     return { start, end };
   };
 
-  const handleTextPaste: React.ClipboardEventHandler<HTMLInputElement> = (e) => {
+  const handleTextPaste: React.ClipboardEventHandler<HTMLInputElement> = (e): void => {
     if (isNumber || !isDefined(maxLength)) return;
     const input = e.currentTarget;
     const pasteText = e.clipboardData.getData('text');
@@ -365,7 +370,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     }
   };
 
-  const handleNumberPaste: React.ClipboardEventHandler<HTMLInputElement> = (e) => {
+  const handleNumberPaste: React.ClipboardEventHandler<HTMLInputElement> = (e): void => {
     if (!isNumber) return;
     const pasteText = e.clipboardData.getData('text');
     if (!pasteText) return;
@@ -382,7 +387,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     }
   };
 
-  const handleChange: React.ComponentProps<typeof Input>['onChange'] = (_e, data) => {
+  const handleChange: React.ComponentProps<typeof Input>['onChange'] = (_e, data): void => {
     const raw = data.value ?? '';
     const sanitized0 = isNumber ? sanitizeDecimal(raw) : raw;
     const { value: next, trimmed } = isNumber
@@ -405,7 +410,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     setErrorBoth(currentError);
   };
 
-  const handleBlur: React.FocusEventHandler<HTMLInputElement> = () => {
+  const handleBlur: React.FocusEventHandler<HTMLInputElement> = (): void => {
     setTouched(true);
     const finalError =
       (!isNumber && isDefined(maxLength) && localVal.length >= maxLength)
@@ -422,7 +427,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     : undefined;
 
   return (
-    <div hidden={isHidden}>
+    <div hidden={isHidden} className="fieldClass">
       <Field
         label={displayName}
         required={isRequired}
