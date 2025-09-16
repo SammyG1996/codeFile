@@ -182,7 +182,10 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   /* ---------- number helpers ---------- */
 
-  const valueToString = (v: unknown): string => (v === undefined ? '' : String(v));
+  // CHANGED: treat both null and undefined as empty string for local display
+  const valueToString = (v: unknown): string =>
+    (v === null || v === undefined) ? '' : String(v);
+
   const allowNegative = (isDefined(min) && min < 0) || (isDefined(max) && max < 0);
 
   const decimalLimit: 1 | 2 | undefined = React.useMemo(() => {
@@ -208,7 +211,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const fractionDigits = (val: string): number => {
     const dot = val.indexOf('.');
     return dot === -1 ? 0 : Math.max(0, val.length - dot - 1);
-    };
+  };
 
   const applyDecimalLimit = React.useCallback(
     (val: string): { value: string; trimmed: boolean } => {
@@ -335,6 +338,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const handleTextPaste: React.ClipboardEventHandler<HTMLInputElement> = (e): void => {
     if (isNumber || !isDefined(maxLength)) return;
     const input = e.currentTarget;
+    the:
     const pasteText = e.clipboardData.getData('text');
     if (!pasteText) return;
 
@@ -404,8 +408,9 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
         ? lengthMsg
         : validate(localVal);
     // update local + global error
+    setError(finalError);
     // eslint-disable-next-line @rushstack/no-new-null
-    setError(finalError); GlobalErrorHandle(id, finalError === '' ? null : finalError);
+    GlobalErrorHandle(id, finalError === '' ? null : finalError);
     // single place we push to GlobalFormData
     commitValue(localVal);
   };
