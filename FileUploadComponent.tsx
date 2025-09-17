@@ -20,10 +20,11 @@
  * What this component does (high level):
  * 1) Renders a Fluent UI "file picker" that follows our global form rules.
  * 2) NEW mode (FormMode===8): show picker only; no SharePoint calls.
- * 3) EDIT/VIEW: if FormData.attachments === true, fetch existing SP attachments once
+ * 3) EDIT/VIEW (FormMode!==8): if FormData.attachments === true, fetch existing SP attachments once
  *    and display them (read-only). If false, skip the API entirely.
  * 4) Never writes to global state on mount. Only writes on user actions.
  * 5) Parent form decides when/how to actually upload on Save.
+ * 6) In multi-file mode, the button appends (Add more files). In single-file mode, it replaces (Choose different file).
  */
 
 import * as React from 'react';
@@ -31,10 +32,10 @@ import { Field, Button, Text, useId, Link } from '@fluentui/react-components';
 import { DismissRegular, DocumentRegular, AttachRegular } from '@fluentui/react-icons';
 import { DynamicFormContext } from './DynamicFormContext';
 
-// ✅ Import the SPFx Form Customizer *type* (we get the instance from DynamicFormContext)
+// Type-only import (we read the instance from DynamicFormContext)
 import type { FormCustomizerContext } from '@microsoft/sp-listview-extensibility';
 
-// ✅ Import your project’s fetch wrapper directly (no prop)
+// Project networking helper (direct import; not passed as a prop)
 import { getFetchAPI } from '../Utilis/getFetchApi';
 
 /** Public props the parent will pass in */
@@ -144,41 +145,36 @@ export default function FileUploadComponentSP(props: FileUploadPropsSP): JSX.Ele
     submitting,
   } = props;
 
-  /* ---- 1) Read our “global form” context, but don’t assume a strict shape ----
-     We only pull the pieces we actually use: FormMode, FormData, and the 2 callbacks.
-     We also read the FormCustomizerContext instance out of it. */
+  /* ---- 1) Read our “global form” context (we only pull what we use) ---- */
   const formCtx = React.useContext(DynamicFormContext);
   const ctx = formCtx as unknown as Record<string, unknown>;
 
   const FormData = hasKey(ctx, 'FormData') ? getKey<Record<string, unknown>>(ctx, 'FormData') : undefined;
   const FormMode = hasKey(ctx, 'FormMode') ? getKey<number>(ctx, 'FormMode') : undefined;
 
-  /** These two are required to exist on the provider (we “assert-read” them). */
+  /** Required callbacks provided by our form provider */
   const GlobalFormData = getKey<(id: string, value: unknown) => void>(ctx, 'GlobalFormData');
   const GlobalErrorHandle = getKey<(id: string, error: string | null) => void>(ctx, 'GlobalErrorHandle');
 
-  /** ✅ We import the FormCustomizerContext *type* and read its instance from DynamicFormContext */
+  /** Form Customizer instance is stored on the same context (type-only import above) */
   const formCustomizerContext = hasKey(ctx, 'FormCustomizerContext')
     ? getKey<FormCustomizerContext>(ctx, 'FormCustomizerContext')
     : undefined;
 
-  /** Mode flags: our org uses 8 = NEW, 4 = VIEW */
+  /** Mode flags: org convention is 8 = NEW, 4 = VIEW */
   const isDisplayForm = FormMode === 4; // VIEW
   const isNewMode     = FormMode === 8; // NEW
 
-  /* ---- 2) Disabled/Hidden calculation mirrors your other fields ---- */
+  /* ---- 2) Disabled/Hidden logic (same conventions as other fields) ---- */
   const disabledFromCtx   = getCtxFlag(ctx, ['isDisabled', 'disabled', 'formDisabled', 'Disabled']);
   const AllDisabledFields = hasKey(ctx, 'AllDisabledFields') ? ctx.AllDisabledFields : undefined;
   const AllHiddenFields   = hasKey(ctx, 'AllHiddenFields') ? ctx.AllHiddenFields : undefined;
 
-  /* ---- 3) Local UI state: required, disabled/hidden, selected files, errors ---- */
+  /* ---- 3) Local UI state ---- */
   const [required, setRequired] = React.useState<boolean>(!!isRequired);
 
   const [isDisabled, setIsDisabled] = React.useState<boolean>(
-    isDisplayForm                                  // view mode
-    || disabledFromCtx                              // global disabled flag
-    || !!submitting                                 // parent is submitting
-    || isListed(AllDisabledFields, displayName)     // in the disabled list
+    isDisplayForm || disabledFromCtx || !!submitting || isListed(AllDisabledFields, displayName)
   );
 
   const [isHidden, setIsHidden] = React.useState<boolean>(
@@ -200,12 +196,13 @@ export default function FileUploadComponentSP(props: FileUploadPropsSP): JSX.Ele
   const inputId = useId('file');
   const inputRef = React.useRef<HTMLInputElement>(null);
 
-  /* ---- 4) Keep local required/disabled/hidden in sync with props + context ---- */
+  /* ---- Treat as single-file if `multiple` is false OR `maxFiles` is exactly 1 ---- */
+  const isSingleSelection = (!multiple) || (maxFiles === 1);
 
-  // If the parent toggles isRequired at runtime, reflect it locally.
+  /* ---- 4) Keep required/disabled/hidden in sync with props + context ---- */
+
   React.useEffect(() => setRequired(!!isRequired), [isRequired]);
 
-  // Recompute disabled/hidden when any of the inputs that can influence them change.
   React.useEffect(() => {
     const fromMode        = isDisplayForm;
     const fromCtx         = disabledFromCtx;
@@ -217,9 +214,7 @@ export default function FileUploadComponentSP(props: FileUploadPropsSP): JSX.Ele
     setIsHidden(fromHiddenSet);
   }, [isDisplayForm, disabledFromCtx, AllDisabledFields, AllHiddenFields, displayName, submitting]);
 
-  /* ---- 5) EDIT/VIEW requirement: conditionally fetch existing SharePoint attachments ----
-     Per the requirement, we only call SharePoint in EDIT/VIEW *if* the current item has
-     `attachments === true` in FormData. Otherwise we don’t call the API at all. */
+  /* ---- 5) EDIT/VIEW: fetch existing SharePoint attachments conditionally ---- */
   React.useEffect(() => {
     if (isNewMode) return; // NEW → explicitly no API call
 
@@ -250,7 +245,6 @@ export default function FileUploadComponentSP(props: FileUploadPropsSP): JSX.Ele
       setLoadingSP(true);
       setLoadError('');
       try {
-        // ✅ Call your project’s fetch helper directly
         const resp = await getFetchAPI({
           spUrl,
           method: 'GET',
@@ -281,7 +275,7 @@ export default function FileUploadComponentSP(props: FileUploadPropsSP): JSX.Ele
   const validateSelection = React.useCallback((list: File[]): string => {
     if (required && list.length === 0) return REQUIRED_MSG;
 
-    if (multiple && isDefined(maxFiles) && list.length > maxFiles) {
+    if (!isSingleSelection && isDefined(maxFiles) && list.length > maxFiles) {
       return TOO_MANY_MSG(maxFiles);
     }
 
@@ -292,33 +286,60 @@ export default function FileUploadComponentSP(props: FileUploadPropsSP): JSX.Ele
       }
     }
     return '';
-  }, [required, multiple, maxFiles, maxFileSizeMB]);
+  }, [required, isSingleSelection, maxFiles, maxFileSizeMB]);
 
   /** Our single write path to the global form data (null when nothing selected) */
   const commitValue = React.useCallback((list: File[]) => {
     // eslint-disable-next-line @rushstack/no-new-null
-    GlobalFormData(id, list.length === 0 ? null : (multiple ? list : list[0]));
-  }, [GlobalFormData, id, multiple]);
+    GlobalFormData(id, list.length === 0 ? null : (isSingleSelection ? list[0] : list));
+  }, [GlobalFormData, id, isSingleSelection]);
 
-  /* ---- 7) User event handlers (only places we write to globals) ---- */
+  /* ---- 7) User event handlers ---- */
 
   /** Open the hidden <input type="file"> unless disabled by context */
   const openPicker = () => { if (!isDisabled) inputRef.current?.click(); };
 
-  /** User chose files in the dialog */
+  /** User chose files in the dialog.
+   *  - Single-file mode or first selection → replace.
+   *  - Multi-file mode with existing files → append (up to maxFiles).
+   */
   const onFilesPicked: React.ChangeEventHandler<HTMLInputElement> = (e) => {
-    const list = Array.from(e.currentTarget.files ?? []);
-    const msg = validateSelection(list);
+    const picked = Array.from(e.currentTarget.files ?? []);
 
-    setFiles(list);
+    let next: File[];
+    let msg = '';
+
+    if (isSingleSelection || files.length === 0) {
+      // Single-file mode OR first selection: replace the list with the new pick
+      next = picked.slice(0, 1); // ensure only one in single selection
+    } else {
+      // Multi-file append mode
+      if (isDefined(maxFiles)) {
+        const allowedSlots = Math.max(0, maxFiles - files.length);
+        const toAdd = picked.slice(0, allowedSlots);
+        next = files.concat(toAdd);
+
+        // If user tried to add more than allowed, surface "too many" error
+        if (picked.length > allowedSlots) {
+          msg = TOO_MANY_MSG(maxFiles);
+        }
+      } else {
+        next = files.concat(picked);
+      }
+    }
+
+    // If we didn't already set a "too many" message, validate normally
+    if (!msg) msg = validateSelection(next);
+
+    setFiles(next);
     setError(msg);
 
-    // Announce the current error state to the parent (null clears an existing error)
     // eslint-disable-next-line @rushstack/no-new-null
     GlobalErrorHandle(id, msg === '' ? null : msg);
+    commitValue(next);
 
-    // Commit the selection so the parent has the files (or null)
-    commitValue(list);
+    // Allow re-selecting the same file(s) immediately if desired
+    if (inputRef.current) inputRef.current.value = '';
   };
 
   /** Remove a single file from the local selection */
@@ -336,11 +357,12 @@ export default function FileUploadComponentSP(props: FileUploadPropsSP): JSX.Ele
 
   /** Clear all files from the local selection */
   const clearAll = () => {
+    const msg = required ? REQUIRED_MSG : '';
     setFiles([]);
-    setError(required ? REQUIRED_MSG : '');
+    setError(msg);
 
     // eslint-disable-next-line @rushstack/no-new-null
-    GlobalErrorHandle(id, (required ? REQUIRED_MSG : '') || null);
+    GlobalErrorHandle(id, msg || null);
     commitValue([]);
 
     // Let the user pick the same file again without needing to refresh
@@ -407,7 +429,7 @@ export default function FileUploadComponentSP(props: FileUploadPropsSP): JSX.Ele
           id={inputId}
           ref={inputRef}
           type="file"
-          multiple={multiple}
+          multiple={!isSingleSelection}
           accept={accept}
           style={{ display: 'none' }}
           onChange={onFilesPicked}
@@ -422,7 +444,9 @@ export default function FileUploadComponentSP(props: FileUploadPropsSP): JSX.Ele
             onClick={openPicker}
             disabled={isDisabled}
           >
-            {files.length ? 'Choose different file' : (multiple ? 'Choose files' : 'Choose file')}
+            {files.length === 0
+              ? (isSingleSelection ? 'Choose file' : 'Choose files')
+              : (isSingleSelection ? 'Choose different file' : 'Add more files')}
           </Button>
 
           {files.length > 0 && (
@@ -436,11 +460,11 @@ export default function FileUploadComponentSP(props: FileUploadPropsSP): JSX.Ele
             </Button>
           )}
 
-          {(accept || maxFileSizeMB || (multiple && maxFiles)) && (
+          {(accept || isDefined(maxFileSizeMB) || (!isSingleSelection && isDefined(maxFiles))) && (
             <Text size={200} wrap>
               {accept && <span>Allowed: <code>{accept}</code>. </span>}
               {isDefined(maxFileSizeMB) && <span>Max size: {maxFileSizeMB} MB/file. </span>}
-              {multiple && isDefined(maxFiles) && <span>Max files: {maxFiles}.</span>}
+              {!isSingleSelection && isDefined(maxFiles) && <span>Max files: {maxFiles}.</span>}
             </Text>
           )}
         </div>
