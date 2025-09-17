@@ -11,8 +11,6 @@
  *   isRequired={false}
  *   description="Add any supporting files."
  *   submitting={isSubmitting}
- *   formCustomizerContext={FormCustomizerContext}   // pass your SPFx Form Customizer context
- *   getFetchAPI={getFetchAPI}                       // pass your SPHttpClient/fetch wrapper
  * />
  *
  * ——————————————————————————————————————————————————————————————————————
@@ -20,21 +18,24 @@
  * FileUploadComponentSP.tsx
  *
  * What this component does (high level):
- * 1) Renders a Fluent UI "file picker" field that follows the same rules as our other fields
- *    (disabled/hidden lists, required validation, etc.).
- * 2) NEW mode (FormMode===8): just show the file picker. We do NOT call SharePoint in NEW mode.
- * 3) EDIT/VIEW mode (FormMode!==8): if the current item reports `FormData.attachments === true`,
- *    we call SharePoint once to fetch and display existing attachments; otherwise we show nothing.
- * 4) We NEVER write to global state on mount. We only call:
- *       - GlobalFormData(id, value) when the user selects/clears files
- *       - GlobalErrorHandle(id, message) when we need to surface a validation error
- * 5) The parent form can then decide what to do with the files (e.g., upload on Save).
+ * 1) Renders a Fluent UI "file picker" that follows our global form rules.
+ * 2) NEW mode (FormMode===8): show picker only; no SharePoint calls.
+ * 3) EDIT/VIEW: if FormData.attachments === true, fetch existing SP attachments once
+ *    and display them (read-only). If false, skip the API entirely.
+ * 4) Never writes to global state on mount. Only writes on user actions.
+ * 5) Parent form decides when/how to actually upload on Save.
  */
 
 import * as React from 'react';
 import { Field, Button, Text, useId, Link } from '@fluentui/react-components';
 import { DismissRegular, DocumentRegular, AttachRegular } from '@fluentui/react-icons';
 import { DynamicFormContext } from './DynamicFormContext';
+
+// ✅ Import the SPFx Form Customizer *type* (we get the instance from DynamicFormContext)
+import type { FormCustomizerContext } from '@microsoft/sp-listview-extensibility';
+
+// ✅ Import your project’s fetch wrapper directly (no prop)
+import { getFetchAPI } from '../Utilis/getFetchApi';
 
 /** Public props the parent will pass in */
 export interface FileUploadPropsSP {
@@ -67,12 +68,6 @@ export interface FileUploadPropsSP {
 
   /** When the parent is submitting, we disable the control */
   submitting?: boolean;
-
-  /** SPFx Form Customizer context (we use it only to build the REST URL in Edit/View) */
-  formCustomizerContext: any;
-
-  /** Your wrapper around SPHttpClient/fetch; must support GET to SharePoint REST */
-  getFetchAPI: (init: { spUrl: string; method?: string; headers?: Record<string, string> }) => Promise<any>;
 }
 
 /* ------------------------------ Small helpers ------------------------------ */
@@ -147,12 +142,11 @@ export default function FileUploadComponentSP(props: FileUploadPropsSP): JSX.Ele
     description = '',
     className,
     submitting,
-    formCustomizerContext,
-    getFetchAPI,
   } = props;
 
   /* ---- 1) Read our “global form” context, but don’t assume a strict shape ----
-     We only pull the pieces we actually use: FormMode, FormData, and the 2 callbacks. */
+     We only pull the pieces we actually use: FormMode, FormData, and the 2 callbacks.
+     We also read the FormCustomizerContext instance out of it. */
   const formCtx = React.useContext(DynamicFormContext);
   const ctx = formCtx as unknown as Record<string, unknown>;
 
@@ -162,6 +156,11 @@ export default function FileUploadComponentSP(props: FileUploadPropsSP): JSX.Ele
   /** These two are required to exist on the provider (we “assert-read” them). */
   const GlobalFormData = getKey<(id: string, value: unknown) => void>(ctx, 'GlobalFormData');
   const GlobalErrorHandle = getKey<(id: string, error: string | null) => void>(ctx, 'GlobalErrorHandle');
+
+  /** ✅ We import the FormCustomizerContext *type* and read its instance from DynamicFormContext */
+  const formCustomizerContext = hasKey(ctx, 'FormCustomizerContext')
+    ? getKey<FormCustomizerContext>(ctx, 'FormCustomizerContext')
+    : undefined;
 
   /** Mode flags: our org uses 8 = NEW, 4 = VIEW */
   const isDisplayForm = FormMode === 4; // VIEW
@@ -251,6 +250,7 @@ export default function FileUploadComponentSP(props: FileUploadPropsSP): JSX.Ele
       setLoadingSP(true);
       setLoadError('');
       try {
+        // ✅ Call your project’s fetch helper directly
         const resp = await getFetchAPI({
           spUrl,
           method: 'GET',
@@ -275,9 +275,7 @@ export default function FileUploadComponentSP(props: FileUploadPropsSP): JSX.Ele
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNewMode, formCustomizerContext, FormData]);
 
-  /* ---- 6) Validation & commit helpers ----
-     We validate locally for UX, then notify the parent via GlobalErrorHandle.
-     We commit the selected file(s) to GlobalFormData so the parent can save/upload later. */
+  /* ---- 6) Validation & commit helpers ---- */
 
   /** Check required, count, size limits (accept= is handled by the browser UI) */
   const validateSelection = React.useCallback((list: File[]): string => {
@@ -349,11 +347,7 @@ export default function FileUploadComponentSP(props: FileUploadPropsSP): JSX.Ele
     if (inputRef.current) inputRef.current.value = '';
   };
 
-  /* ---- 8) Render ----
-     - We honor “hidden” by returning a hidden wrapper (keeps layout parity with other fields).
-     - In Edit/View with attachments=true, we show existing SP attachments above the picker.
-     - Then we show the trigger/clear buttons and a list of newly selected (local) files.
-   */
+  /* ---- 8) Render ---- */
 
   if (isHidden) return <div hidden className="fieldClass" />;
 
