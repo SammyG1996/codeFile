@@ -300,31 +300,39 @@ export default function FileUploadComponentSP(props: FileUploadPropsSP): JSX.Ele
   const openPicker = () => { if (!isDisabled) inputRef.current?.click(); };
 
   /** User chose files in the dialog.
-   *  - Single-file mode or first selection → replace.
-   *  - Multi-file mode with existing files → append (up to maxFiles).
+   *  - Single-file mode → replace with just the first picked file.
+   *  - Multi-file mode:
+   *      • On first selection: keep all picked files (capped by maxFiles if set).
+   *      • On subsequent selections: append new picks up to remaining slots.
    */
   const onFilesPicked: React.ChangeEventHandler<HTMLInputElement> = (e) => {
     const picked = Array.from(e.currentTarget.files ?? []);
-
-    let next: File[];
+    let next: File[] = [];
     let msg = '';
 
-    if (isSingleSelection || files.length === 0) {
-      // Single-file mode OR first selection: replace the list with the new pick
-      next = picked.slice(0, 1); // ensure only one in single selection
+    if (isSingleSelection) {
+      // Always keep only one file in single-selection mode
+      next = picked.slice(0, 1);
     } else {
-      // Multi-file append mode
-      if (isDefined(maxFiles)) {
-        const allowedSlots = Math.max(0, maxFiles - files.length);
-        const toAdd = picked.slice(0, allowedSlots);
-        next = files.concat(toAdd);
+      const already = files.length;
+      const capacity = isDefined(maxFiles) ? Math.max(0, maxFiles - already) : picked.length;
 
-        // If user tried to add more than allowed, surface "too many" error
-        if (picked.length > allowedSlots) {
+      if (already === 0) {
+        // First selection in multi mode: take as many as allowed (could be many)
+        const toTake = isDefined(maxFiles) ? Math.min(picked.length, maxFiles) : picked.length;
+        next = picked.slice(0, toTake);
+
+        if (isDefined(maxFiles) && picked.length > maxFiles) {
           msg = TOO_MANY_MSG(maxFiles);
         }
       } else {
-        next = files.concat(picked);
+        // Subsequent selections: append up to remaining capacity
+        const toAdd = picked.slice(0, capacity);
+        next = files.concat(toAdd);
+
+        if (isDefined(maxFiles) && picked.length > capacity) {
+          msg = TOO_MANY_MSG(maxFiles);
+        }
       }
     }
 
