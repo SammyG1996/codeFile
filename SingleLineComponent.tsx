@@ -72,7 +72,7 @@ export interface SingleLineFieldProps {
   maxLength?: number;
 
   // TYPE
-  type?: 'text' | 'number' | 'file'; // <— now supports 'file' (text is default when omitted)
+  type?: 'text' | 'number' | 'file'; // <— supports 'file' (text is default when omitted)
 
   // NUMBER ONLY
   min?: number;
@@ -124,7 +124,7 @@ const isListed = (bag: unknown, name: string): boolean => {
   if (!bag) return false;
   if (Array.isArray(bag)) return bag.some(v => String(v).trim().toLowerCase() === needle);
   if (typeof (bag as { has?: unknown }).has === 'function') {
-    for (const v of bag as Set<unknown>) if (String(v).trim().toLowerCase() === needle) return true;
+    for (const v of (bag as Set<unknown>)) if (String(v).trim().toLowerCase() === needle) return true;
     return false;
   }
   if (typeof bag === 'string') return bag.split(',').map(s => s.trim().toLowerCase()).includes(needle);
@@ -138,11 +138,13 @@ const isListed = (bag: unknown, name: string): boolean => {
 };
 
 /** Split file extension (keeps dot in ext, handles ".env" / no-ext) */
-const splitExt = (name: string) => {
+function splitExt(name: string): { base: string; ext: string } {
   const i = name.lastIndexOf('.');
-  if (i <= 0 || i === name.length - 1) return { base: name, ext: '' };
+  if (i <= 0 || i === name.length - 1) {
+    return { base: name, ext: '' };
+  }
   return { base: name.slice(0, i), ext: name.slice(i) };
-};
+}
 
 /* ---------- Component ---------- */
 
