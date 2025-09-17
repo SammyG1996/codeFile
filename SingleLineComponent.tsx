@@ -4,6 +4,7 @@
  * Summary
  * - Single-line input using Fluent UI v9 (<Field> + <Input>).
  * - TEXT mode (default) or NUMBER mode (when type==='number').
+ * - NEW: FILE display mode (when type==='file') — shows base name in the field and moves extension to contentAfter.
  * - Validations (required, text maxLength, number format, min/max, decimalPlaces).
  * - Disabled = (FormMode===4) OR (context disabled flags) OR (AllDisabledFields) OR (submitting).
  * - Hidden  = (AllHiddenFields) — hides the wrapper <div>.
@@ -13,11 +14,11 @@
  * - No GlobalFormData while typing; it commits only on BLUR.
  * - GlobalErrorHandle is called only after the field is touched (blurred once).
  * - When committing to GlobalFormData:
- *     · TEXT: empty string → null
+ *     · TEXT/FILE: empty string → null (FILE stores/reports the full name, base+ext)
  *     · NUMBER: empty/invalid → null; otherwise a real number
  *
  * Example usage
- * // TEXT
+ * // TEXT (default)
  * <SingleLineComponent
  *   id="title"
  *   displayName="Title"
@@ -43,6 +44,15 @@
  *   description="0–100, up to 2 decimals"
  *   submitting={isSubmitting}
  * />
+ *
+ * // FILE (display-only filename; base in field, extension outside)
+ * <SingleLineComponent
+ *   id="doc"
+ *   displayName="Document"
+ *   type="file"
+ *   starterValue="Proposal_v3.docx"
+ *   placeholder="Filename"
+ * />
  */
 
 import * as React from 'react';
@@ -61,8 +71,10 @@ export interface SingleLineFieldProps {
   // TEXT ONLY
   maxLength?: number;
 
+  // TYPE
+  type?: 'text' | 'number' | 'file'; // <— now supports 'file' (text is default when omitted)
+
   // NUMBER ONLY
-  type?: 'number';
   min?: number;
   max?: number;
   contentAfter?: 'percentage';
@@ -125,6 +137,13 @@ const isListed = (bag: unknown, name: string): boolean => {
   return false;
 };
 
+/** Split file extension (keeps dot in ext, handles ".env" / no-ext) */
+const splitExt = (name: string) => {
+  const i = name.lastIndexOf('.');
+  if (i <= 0 || i === name.length - 1) return { base: name, ext: '' };
+  return { base: name.slice(0, i), ext: name.slice(i) };
+};
+
 /* ---------- Component ---------- */
 
 export default function SingleLineComponent(props: SingleLineFieldProps): JSX.Element {
@@ -159,6 +178,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   const isDisplayForm = FormMode === 4;
   const isNumber = type === 'number';
+  const isFile = type === 'file';
 
   const disabledFromCtx = getCtxFlag(ctx, ['isDisabled', 'disabled', 'formDisabled', 'Disabled']);
 
@@ -262,7 +282,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   /* ---------- commit + error ---------- */
 
-  // GlobalFormData: ONLY on blur; empty → null
+  // GlobalFormData: ONLY on blur; empty → null (file mode commits the full name localVal)
   const commitValue = React.useCallback((val: string): void => {
     if (isNumber) {
       const t = val.trim();
@@ -338,7 +358,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const handleTextPaste: React.ClipboardEventHandler<HTMLInputElement> = (e): void => {
     if (isNumber || !isDefined(maxLength)) return;
     const input = e.currentTarget;
-    the:
     const pasteText = e.clipboardData.getData('text');
     if (!pasteText) return;
 
@@ -356,8 +375,17 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     if (pasteText.length > spaceLeft) {
       e.preventDefault();
       const insert = pasteText.slice(0, Math.max(0, spaceLeft));
-      const nextValue = input.value.slice(0, start) + insert + input.value.slice(end);
-      setLocalVal(nextValue); // local only
+      const nextBase = input.value.slice(0, start) + insert + input.value.slice(end);
+
+      if (isFile) {
+        // In file mode, recombine with the current extension for storage
+        const { ext } = splitExt(localVal);
+        const nextValue = nextBase === '' ? '' : `${nextBase}${ext}`;
+        setLocalVal(nextValue);
+      } else {
+        setLocalVal(nextBase); // local only
+      }
+
       pushErrorIfTouched(lengthMsg);
     }
   };
@@ -381,45 +409,66 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   const handleChange: React.ComponentProps<typeof Input>['onChange'] = (_e, data): void => {
     const raw = data.value ?? '';
-    const sanitized0 = isNumber ? sanitizeDecimal(raw) : raw;
-    const { value: next, trimmed } = isNumber
-      ? applyDecimalLimit(sanitized0)
-      : { value: sanitized0, trimmed: false };
 
-    setLocalVal(next); // local only
+    if (isNumber) {
+      const sanitized0 = sanitizeDecimal(raw);
+      const { value: next, trimmed } = applyDecimalLimit(sanitized0);
+      setLocalVal(next); // local only
+      if (trimmed && decimalLimit !== undefined) {
+        pushErrorIfTouched(decimalLimitMsg(decimalLimit));
+        return;
+      }
+      const currentError = validateNumber(next);
+      pushErrorIfTouched(currentError);
+      return;
+    }
 
-    if (!isNumber && isDefined(maxLength) && next.length >= maxLength) {
+    if (isFile) {
+      // User edits the base; we keep the stored value as base+ext.
+      const { ext } = splitExt(localVal);
+      const recombined = raw === '' ? '' : `${raw}${ext}`;
+      setLocalVal(recombined);
+      const currentError = touched ? validateText(recombined) : '';
+      pushErrorIfTouched(currentError);
+      return;
+    }
+
+    // text
+    setLocalVal(raw);
+    if (isDefined(maxLength) && raw.length >= maxLength) {
       pushErrorIfTouched(lengthMsg);
       return;
     }
-    if (isNumber && trimmed && decimalLimit !== undefined) {
-      pushErrorIfTouched(decimalLimitMsg(decimalLimit));
-      return;
-    }
-
-    const currentError = isNumber ? validateNumber(next) : (touched ? validateText(next) : '');
+    const currentError = touched ? validateText(raw) : '';
     pushErrorIfTouched(currentError);
   };
 
   const handleBlur: React.FocusEventHandler<HTMLInputElement> = (): void => {
     setTouched(true);
     const finalError =
-      (!isNumber && isDefined(maxLength) && localVal.length >= maxLength)
+      (!isNumber && isDefined(maxLength) && (isFile ? splitExt(localVal).base.length : localVal.length) >= (maxLength ?? Infinity))
         ? lengthMsg
-        : validate(localVal);
+        : validate(isFile ? splitExt(localVal).base : localVal);
     // update local + global error
     setError(finalError);
     // eslint-disable-next-line @rushstack/no-new-null
     GlobalErrorHandle(id, finalError === '' ? null : finalError);
-    // single place we push to GlobalFormData
+    // single place we push to GlobalFormData (file mode commits full name)
     commitValue(localVal);
   };
 
   /* ---------- render ---------- */
 
-  const after = isNumber && contentAfter === 'percentage'
-    ? <Text size={400} id={`${inputId}Per`}>%</Text>
-    : undefined;
+  // Build contentAfter: show file extension first, else keep % for numbers
+  const extForAfter = isFile ? splitExt(localVal).ext : '';
+  const after = (isFile && extForAfter)
+    ? <Text size={400} id={`${inputId}Ext`}>{extForAfter}</Text>
+    : (isNumber && contentAfter === 'percentage')
+      ? <Text size={400} id={`${inputId}Per`}>%</Text>
+      : undefined;
+
+  // Display value: base when file mode, otherwise the raw localVal
+  const displayValue = isFile ? splitExt(localVal).base : localVal;
 
   return (
     <div hidden={isHidden} className="fieldClass">
@@ -434,19 +483,22 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
           name={id}
           className={className}
           placeholder={placeholder}
-          value={localVal}
+          value={displayValue}
           onChange={handleChange}
           onBlur={handleBlur}
           onPaste={isNumber ? handleNumberPaste : handleTextPaste}
           disabled={isDisabled}
+
           /* TEXT ONLY */
           maxLength={!isNumber && isDefined(maxLength) ? maxLength : undefined}
+
           /* NUMBER ONLY */
-          type={isNumber ? 'number' : 'text'}
+          type={isNumber ? 'number' : 'text'}     // file mode renders as text (display-only filename)
           inputMode={isNumber ? 'decimal' : undefined}
           step="any"
           min={isNumber && isDefined(min) ? min : undefined}
           max={isNumber && isDefined(max) ? max : undefined}
+
           contentAfter={after}
         />
         {description !== '' && <div className="descriptionText">{description}</div>}
