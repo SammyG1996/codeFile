@@ -12,10 +12,6 @@
  *   description="Add any supporting files."
  *   submitting={isSubmitting}
  * />
- *
- * ——————————————————————————————————————————————————————————————————————
- *
- * FileUploadComponent.tsx
  */
 
 import * as React from 'react';
@@ -41,14 +37,15 @@ export interface FileUploadProps {
   submitting?: boolean;
 }
 
-/** Minimal, type-safe view of our form context. All fields optional. */
+/** Minimal view of our form context. All fields optional on purpose. */
 type FormCtxShape = {
   FormData?: Record<string, unknown>;
   FormMode?: number;
   GlobalFormData?: (id: string, value: unknown) => void;
-  GlobalErrorHandle?: (id: string, error: string | null) => void;
+  // Allow undefined so we can avoid `null` writes per lint rule.
+  GlobalErrorHandle?: (id: string, error: string | undefined) => void;
 
-  // The SPFx form context instance (may be the context itself or wrapped under `.context`)
+  // SPFx form context instance (sometimes provided as `.context`, sometimes direct)
   FormCustomizerContext?: unknown;
 
   // optional flags/lists used by our field pattern
@@ -175,7 +172,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   const FormData = raw.FormData;
   const FormMode = raw.FormMode;
   const GlobalFormData = raw.GlobalFormData as (id: string, value: unknown) => void;
-  const GlobalErrorHandle = raw.GlobalErrorHandle as (id: string, error: string | null) => void;
+  const GlobalErrorHandle = raw.GlobalErrorHandle as (id: string, error: string | undefined) => void;
 
   // Treat this as unknown, we’ll safely read the fields we need
   const formCustomizerContext: unknown = raw.FormCustomizerContext as unknown as SPFxFormCustomizerContext | unknown;
@@ -203,7 +200,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   const [error, setError] = React.useState<string>('');
 
   // Existing SP attachments (Edit/View only, conditional)
-  const [spAttachments, setSpAttachments] = React.useState<SPAttachment[] | null>(null);
+  const [spAttachments, setSpAttachments] = React.useState<SPAttachment[] | undefined>(undefined);
   const [loadingSP, setLoadingSP] = React.useState<boolean>(false);
   const [loadError, setLoadError] = React.useState<string>('');
 
@@ -236,7 +233,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
     const hasAttachmentsFlag = readBool(FormData, 'attachments');
     if (!hasAttachmentsFlag) {
-      setSpAttachments(null);
+      setSpAttachments(undefined);
       setLoadError('');
       return;
     }
@@ -251,8 +248,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
     let cancelled = false;
 
-    // Use `void` to satisfy no-floating-promises and handle errors internally.
-    void (async (): Promise<void> => {
+    (async (): Promise<void> => {
       setLoadingSP(true);
       setLoadError('');
       try {
@@ -262,39 +258,40 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           headers: { Accept: 'application/json;odata=nometadata' },
         });
 
-        // Narrow the response safely
-        const rows: unknown = (respUnknown as { value?: unknown[] } | null)?.value ?? [];
-        const firstRow = Array.isArray(rows) ? rows[0] : undefined;
-        const attsRaw: unknown =
-          firstRow && typeof firstRow === 'object' ? (firstRow as Record<string, unknown>)['AttachmentFiles'] : null;
+        // rows -> firstRow -> firstRow.AttachmentFiles (use dot notation by narrowing)
+        const rows = ((respUnknown as { value?: unknown[] } | null)?.value ?? []) as unknown[];
+        const firstRow = Array.isArray(rows) ? (rows[0] as { AttachmentFiles?: unknown }) : undefined;
+        const attsRaw = firstRow?.AttachmentFiles;
 
         const atts: SPAttachment[] = Array.isArray(attsRaw)
           ? attsRaw
-              .map((x): SPAttachment | null => {
+              .map((x): SPAttachment | undefined => {
                 if (x && typeof x === 'object') {
                   const o = x as Record<string, unknown>;
-                  const FileName = typeof o.FileName === 'string' ? o.FileName : '';
-                  const ServerRelativeUrl = typeof o.ServerRelativeUrl === 'string' ? o.ServerRelativeUrl : '';
+                  const FileName = typeof o.FileName === 'string' ? o.FileName : undefined;
+                  const ServerRelativeUrl =
+                    typeof o.ServerRelativeUrl === 'string' ? o.ServerRelativeUrl : undefined;
                   if (FileName && ServerRelativeUrl) return { FileName, ServerRelativeUrl };
                 }
-                return null;
+                return undefined;
               })
-              .filter((x): x is SPAttachment => x !== null)
+              .filter((x): x is SPAttachment => x !== undefined)
           : [];
 
         if (!cancelled) setSpAttachments(atts);
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : 'Failed to load attachments.';
         if (!cancelled) {
-          setSpAttachments(null);
+          setSpAttachments(undefined);
           setLoadError(msg);
         }
       } finally {
         if (!cancelled) setLoadingSP(false);
       }
-    })();
+    })().catch(() => {
+      // Promise is handled; no-floating-promises satisfied without using `void`.
+    });
 
-    // ✅ Explicitly type the cleanup return
     return (): void => {
       cancelled = true;
     };
@@ -323,8 +320,8 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
   const commitValue = React.useCallback(
     (list: File[]): void => {
-      // eslint-disable-next-line @rushstack/no-new-null
-      GlobalFormData(id, list.length === 0 ? null : isSingleSelection ? list[0] : list);
+      // write `undefined` instead of `null` to satisfy @rushstack/no-new-null
+      GlobalFormData(id, list.length === 0 ? undefined : isSingleSelection ? list[0] : list);
     },
     [GlobalFormData, id, isSingleSelection]
   );
@@ -365,8 +362,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
     setFiles(next);
     setError(msg);
-    // eslint-disable-next-line @rushstack/no-new-null
-    GlobalErrorHandle(id, msg === '' ? null : msg);
+    GlobalErrorHandle(id, msg === '' ? undefined : msg);
     commitValue(next);
 
     // Allow selecting the same file(s) again
@@ -380,8 +376,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
       setFiles(next);
       setError(msg);
-      // eslint-disable-next-line @rushstack/no-new-null
-      GlobalErrorHandle(id, msg === '' ? null : msg);
+      GlobalErrorHandle(id, msg === '' ? undefined : msg);
       commitValue(next);
     },
     [files, validateSelection, GlobalErrorHandle, id, commitValue]
@@ -397,8 +392,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     const msg = required ? REQUIRED_MSG : '';
     setFiles([]);
     setError(msg);
-    // eslint-disable-next-line @rushstack/no-new-null
-    GlobalErrorHandle(id, msg || null);
+    GlobalErrorHandle(id, msg || undefined);
     commitValue([]);
     if (inputRef.current) inputRef.current.value = '';
   };
@@ -424,7 +418,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                 Error: {loadError}
               </Text>
             )}
-            {!loadingSP && !loadError && spAttachments && spAttachments.length > 0 && (
+            {!loadingSP && !loadError && Array.isArray(spAttachments) && spAttachments.length > 0 && (
               <div style={{ display: 'grid', gap: 6 }}>
                 {spAttachments.map((a, i) => (
                   <div
@@ -458,7 +452,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                 ))}
               </div>
             )}
-            {!loadingSP && !loadError && spAttachments && spAttachments.length === 0 && (
+            {!loadingSP && !loadError && Array.isArray(spAttachments) && spAttachments.length === 0 && (
               <Text size={200}>No existing attachments.</Text>
             )}
           </div>
