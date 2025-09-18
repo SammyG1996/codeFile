@@ -78,7 +78,7 @@ const getCtxFlag = (o: Record<string, unknown>, keys: string[]): boolean =>
 /** Accepts array, Set, comma-string, or object-map and checks membership of displayName */
 const isListed = (bag: unknown, name: string): boolean => {
   const needle = name.trim().toLowerCase();
-  if (bag == null) return false;
+  if (bag === null || bag === undefined) return false;
 
   if (Array.isArray(bag)) return bag.some(v => String(v).trim().toLowerCase() === needle);
 
