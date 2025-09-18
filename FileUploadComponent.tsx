@@ -20,7 +20,10 @@ import { Field, Button, Text, Link } from '@fluentui/react-components';
 import { DismissRegular, DocumentRegular, AttachRegular } from '@fluentui/react-icons';
 import { DynamicFormContext } from './DynamicFormContext';
 
-import type { FormCustomizerContext as SPFxFormCustomizerContext } from '@microsoft/sp-listview-extensibility';
+// 👇 YOUR app's React context that exposes SPFx-like info (list, item, etc.)
+//    Update this import path to wherever your provider lives.
+import { FormCustomizerContext } from '../contexts/FormCustomizerContext';
+
 import { getFetchAPI } from '../Utilis/getFetchApi';
 
 /* ------------------------------ Types ------------------------------ */
@@ -46,9 +49,6 @@ type FormCtxShape = {
   FormMode?: number;
   GlobalFormData?: (id: string, value: unknown) => void;
   GlobalErrorHandle?: (id: string, error: string | undefined) => void;
-
-  // SPFx form context instance (sometimes provided as `.context`, sometimes direct)
-  FormCustomizerContext?: unknown;
 
   // optional flags/lists used by our field pattern
   isDisabled?: boolean;
@@ -115,14 +115,6 @@ const formatBytes = (bytes: number): string => {
   return `${Number.isInteger(n) ? n.toFixed(0) : n.toFixed(2)} ${units[i]}`;
 };
 
-/** Defensive read of a boolean-like field from an unknown object */
-const readBool = (obj: unknown, key: string): boolean => {
-  if (obj && typeof obj === 'object' && hasKey(obj as Record<string, unknown>, key)) {
-    return Boolean((obj as Record<string, unknown>)[key]);
-  }
-  return false;
-};
-
 /**
  * Robustly infer whether FormData indicates the item has attachments.
  * Checks common shapes and returns BOTH the boolean and what key triggered it.
@@ -146,49 +138,89 @@ const readAttachmentsFlagLoose = (
 };
 
 /**
- * Safely read list title & item ID from the provided SPFx Form Customizer context.
- * Supports both shapes:
- *   1) context itself: { list: { title }, item: { ID } }
- *   2) wrapped:       { context: { list: { title }, item: { ID } } }
+ * Tries VERY HARD to find listTitle and itemId across BOTH contexts and FormData.
+ * Priority:
+ *   1) Your dedicated React FormCustomizerContext (wrapped & direct shapes)
+ *   2) DynamicFormContext (some apps mirror values here)
+ *   3) FormData (ID often lives here)
  */
-const getListTitleAndItemId = (
-  ctx: unknown
-): { listTitle?: string; itemId?: number; shape: 'direct' | 'wrapped' | 'unknown' } => {
-  if (ctx && typeof ctx === 'object' && hasKey(ctx as Record<string, unknown>, 'context')) {
-    const root = (ctx as { context: unknown }).context;
-    if (!root || typeof root !== 'object') return { shape: 'wrapped' };
-    const listTitle =
-      hasKey(root as Record<string, unknown>, 'list') &&
-      typeof (root as { list?: { title?: unknown } }).list?.title === 'string'
-        ? ((root as { list?: { title?: string } }).list!.title as string)
-        : undefined;
+const getListTitleAndItemIdLoose = (
+  fcCtxValue: unknown,            // value from your FormCustomizerContext
+  dynamicCtxValue: unknown,       // the whole DynamicFormContext object
+  formData: unknown               // FormData from DynamicFormContext
+): {
+  listTitle?: string;
+  itemId?: number;
+  source: string;
+} => {
+  const pickNum = (v: unknown): number | undefined => {
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    if (typeof v === 'string' && /^\d+$/.test(v)) return Number(v);
+    return undefined;
+  };
+  const pickStr = (v: unknown): string | undefined =>
+    typeof v === 'string' && v.trim() ? v : undefined;
 
-    const itemId =
-      hasKey(root as Record<string, unknown>, 'item') &&
-      typeof (root as { item?: { ID?: unknown } }).item?.ID === 'number'
-        ? ((root as { item?: { ID?: number } }).item!.ID as number)
-        : undefined;
+  const tryPaths = (obj: unknown, paths: string[]): unknown => {
+    if (!obj || typeof obj !== 'object') return undefined;
+    for (const p of paths) {
+      const parts = p.split('.');
+      let cur: any = obj;
+      let ok = true;
+      for (const part of parts) {
+        if (cur && typeof cur === 'object' && part in cur) cur = cur[part];
+        else { ok = false; break; }
+      }
+      if (ok) return cur;
+    }
+    return undefined;
+  };
 
-    return { listTitle, itemId, shape: 'wrapped' };
+  // 1) Your dedicated FormCustomizerContext (wrapped + direct)
+  const titleFromFC = pickStr(
+    tryPaths(fcCtxValue, [
+      'context.list.title', // wrapped SPFx-like
+      'list.title',         // direct
+      'context.listTitle',
+      'listTitle',
+    ])
+  );
+  const idFromFC = pickNum(
+    tryPaths(fcCtxValue, [
+      'context.item.ID',
+      'item.ID',
+      'context.itemId',
+      'itemId',
+      'context.item.Id',
+      'item.Id',
+    ])
+  );
+  if (titleFromFC && idFromFC !== undefined) {
+    return { listTitle: titleFromFC, itemId: idFromFC, source: 'FormCustomizerContext' };
   }
 
-  if (ctx && typeof ctx === 'object') {
-    const listTitle =
-      hasKey(ctx as Record<string, unknown>, 'list') &&
-      typeof (ctx as { list?: { title?: unknown } }).list?.title === 'string'
-        ? ((ctx as { list?: { title?: string } }).list!.title as string)
-        : undefined;
-
-    const itemId =
-      hasKey(ctx as Record<string, unknown>, 'item') &&
-      typeof (ctx as { item?: { ID?: unknown } }).item?.ID === 'number'
-        ? ((ctx as { item?: { ID?: number } }).item!.ID as number)
-        : undefined;
-
-    return { listTitle, itemId, shape: 'direct' };
+  // 2) DynamicFormContext mirror (some apps copy values here)
+  const titleFromDyn = pickStr(
+    tryPaths(dynamicCtxValue, ['list.title', 'listTitle', 'ListTitle', 'Title'])
+  );
+  const idFromDyn = pickNum(
+    tryPaths(dynamicCtxValue, ['item.ID', 'itemId', 'ItemID', 'ID', 'Id'])
+  );
+  if (titleFromDyn && idFromDyn !== undefined) {
+    return { listTitle: titleFromDyn, itemId: idFromDyn, source: 'DynamicFormContext' };
   }
 
-  return { shape: 'unknown' };
+  // 3) FormData fallback (ID is often present)
+  const idFromFD = pickNum(tryPaths(formData, ['ID', 'Id']));
+  const titleFromFD = pickStr(tryPaths(formData, ['ListTitle', 'listTitle']));
+  if (titleFromFD && idFromFD !== undefined) {
+    return { listTitle: titleFromFD, itemId: idFromFD, source: 'FormData' };
+  }
+  if (idFromFD !== undefined && titleFromFC) {
+    return { listTitle: titleFromFC, itemId: idFromFD, source: 'mixed: FC.title + FormData.ID' };
+  }
+
+  return { source: 'not-found' };
 };
 
 /* ------------------------------ Component ------------------------------ */
@@ -229,17 +261,18 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
   log('mount: props =', { id, displayName, multiple, accept, maxFileSizeMB, maxFiles, isRequired, submitting });
 
-  // Context (typed to our minimal shape)
+  // Contexts
   const raw = React.useContext(DynamicFormContext) as unknown as FormCtxShape;
-  log('context snapshot:', raw);
+  // If your FormCustomizerContext is typed, you can add the generic instead of `unknown`
+  const fcValue = React.useContext(FormCustomizerContext as unknown as React.Context<unknown>);
+
+  log('context snapshot (DynamicFormContext):', raw);
+  log('context snapshot (FormCustomizerContext):', fcValue);
 
   const FormData = raw.FormData;
   const FormMode = raw.FormMode;
   const GlobalFormData = raw.GlobalFormData as (id: string, value: unknown) => void;
   const GlobalErrorHandle = raw.GlobalErrorHandle as (id: string, error: string | undefined) => void;
-
-  // Treat this as unknown, we’ll safely read the fields we need
-  const formCustomizerContext: unknown = raw.FormCustomizerContext as unknown as SPFxFormCustomizerContext | unknown;
 
   const isDisplayForm = FormMode === 4; // VIEW
   const isNewMode = FormMode === 8; // NEW
@@ -301,25 +334,29 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     });
   }, [isDisplayForm, disabledFromCtx, AllDisabledFields, AllHiddenFields, displayName, submitting]);
 
-  // EDIT/VIEW: always attempt to fetch existing AttachmentFiles using COLLECTION endpoint with $filter
+  // EDIT/VIEW: fetch existing AttachmentFiles using COLLECTION endpoint with $filter
   React.useEffect((): void | (() => void) => {
     // 1) Mode must be Edit/View (not New)
     if (isNewMode) {
-      logAtt('fetch CONDITIONS:', { isNewMode, listTitle: undefined, itemId: undefined, canFetch: false });
+      logAtt('fetch CONDITIONS:', { isNewMode, listTitle: undefined, itemId: undefined, source: '—', canFetch: false });
       logAtt('fetch SKIPPED (conditions not met): isNewMode === true (New form)');
       return;
     }
 
     // 2) FormData hint (just for visibility)
-    const { value: fdHasAttachments, source } = readAttachmentsFlagLoose(FormData);
-    logAtt('FormData attachments flag (loose):', { value: fdHasAttachments, source });
+    const { value: fdHasAttachments, source: fdSource } = readAttachmentsFlagLoose(FormData);
+    logAtt('FormData attachments flag (loose):', { value: fdHasAttachments, source: fdSource });
     logAtt('FormData keys:', FormData ? Object.keys(FormData) : 'no FormData');
 
-    // 3) Need both listTitle and itemId
-    const { listTitle, itemId, shape } = getListTitleAndItemId(formCustomizerContext);
+    // 3) Need both listTitle and itemId (from EITHER context, or FormData fallback)
+    const { listTitle, itemId, source } = getListTitleAndItemIdLoose(
+      fcValue,
+      raw,
+      FormData
+    );
 
     const canFetch = Boolean(!isNewMode && listTitle && itemId);
-    logAtt('fetch CONDITIONS:', { isNewMode, listTitle, itemId, shape, canFetch });
+    logAtt('fetch CONDITIONS:', { isNewMode, listTitle, itemId, source, canFetch });
 
     if (!canFetch) {
       logAtt('fetch SKIPPED (conditions not met):', {
@@ -332,7 +369,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
     logAtt('fetch TRIGGERED: all conditions satisfied');
 
-    // ✅ Matches your instructions (collection + $filter + $select/$expand)
+    // ✅ Matches instructions (collection + $filter + $select/$expand)
     const spUrl =
       `/_api/web/lists/getbytitle('${encodeURIComponent(listTitle as string)}')/items` +
       `?$filter=Id eq ${encodeURIComponent(String(itemId))}` +
@@ -403,7 +440,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       cancelled = true;
       logAtt('effect cleanup: cancelled fetch');
     };
-  }, [isNewMode, formCustomizerContext, FormData]);
+  }, [isNewMode, raw, fcValue, FormData]);
 
   // 🔎 Anytime attachment state changes, log a clear status message
   React.useEffect((): void => {
@@ -636,7 +673,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
               : 'Add more files'}
           </Button>
 
-          {files.length > 0 && (
+        {files.length > 0 && (
             <Button appearance="secondary" onClick={clearAll} icon={<DismissRegular />} disabled={isDisabled}>
               Clear
             </Button>
