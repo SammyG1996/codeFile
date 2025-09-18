@@ -4,7 +4,7 @@
  * Summary
  * - Single-line input using Fluent UI v9 (<Field> + <Input>).
  * - TEXT mode (default) or NUMBER mode (when type==='number').
- * - NEW: FILE display mode (when type==='file') — shows base name in the field and moves extension to contentAfter.
+ * - FILE display mode (when type==='file') — shows base name in the field and moves extension to contentAfter.
  * - Validations (required, text maxLength, number format, min/max, decimalPlaces).
  * - Disabled = (FormMode===4) OR (context disabled flags) OR (AllDisabledFields) OR (submitting).
  * - Hidden  = (AllHiddenFields) — hides the wrapper <div>.
@@ -16,47 +16,10 @@
  * - When committing to GlobalFormData:
  *     · TEXT/FILE: empty string → null (FILE stores/reports the full name, base+ext)
  *     · NUMBER: empty/invalid → null; otherwise a real number
- *
- * Example usage
- * // TEXT (default)
- * <SingleLineComponent
- *   id="title"
- *   displayName="Title"
- *   starterValue="Initial value"
- *   isRequired
- *   maxLength={120}
- *   placeholder="Enter title"
- *   description="Short helper text"
- *   submitting={isSubmitting}
- * />
- *
- * // NUMBER
- * <SingleLineComponent
- *   id="discount"
- *   displayName="Discount"
- *   type="number"
- *   min={0}
- *   max={100}
- *   decimalPlaces="two"
- *   contentAfter="percentage"
- *   starterValue={12.5}
- *   placeholder="e.g. 12.5"
- *   description="0–100, up to 2 decimals"
- *   submitting={isSubmitting}
- * />
- *
- * // FILE (display-only filename; base in field, extension outside)
- * <SingleLineComponent
- *   id="doc"
- *   displayName="Document"
- *   type="file"
- *   starterValue="Proposal_v3.docx"
- *   placeholder="Filename"
- * />
  */
 
 import * as React from 'react';
-import { Field, Input, Text, useId } from '@fluentui/react-components';
+import { Field, Input, Text } from '@fluentui/react-components';
 import { DynamicFormContext } from './DynamicFormContext';
 
 /* ---------- Props ---------- */
@@ -72,7 +35,7 @@ export interface SingleLineFieldProps {
   maxLength?: number;
 
   // TYPE
-  type?: 'text' | 'number' | 'file'; // <— supports 'file' (text is default when omitted)
+  type?: 'text' | 'number' | 'file'; // supports 'file' (text is default when omitted)
 
   // NUMBER ONLY
   min?: number;
@@ -104,20 +67,16 @@ const rangeMsg = (min?: number, max?: number): string =>
 const decimalLimitMsg = (n: 1 | 2): string =>
   `Maximum ${n} decimal place${n === 1 ? '' : 's'} allowed.`;
 
-// We treat "defined" as "not undefined" (we avoid runtime null checks)
 const isDefined = <T,>(v: T | undefined): v is T => v !== undefined;
 
-/** Generic, safe access to unknown context shape without `any`. */
 const hasKey = (obj: Record<string, unknown>, key: string): boolean =>
   Object.prototype.hasOwnProperty.call(obj, key);
 const getKey = <T,>(obj: Record<string, unknown>, key: string): T =>
   obj[key] as T;
-/** Read a boolean-ish flag from one of several possible keys. */
 const getCtxFlag = (obj: Record<string, unknown>, keys: string[]): boolean => {
   for (const k of keys) if (hasKey(obj, k)) return !!obj[k];
   return false;
 };
-/** Membership over unknown list-like: array, Set, comma string, or object map */
 const toBool = (v: unknown): boolean => !!v;
 const isListed = (bag: unknown, name: string): boolean => {
   const needle = name.trim().toLowerCase();
@@ -166,15 +125,12 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     submitting,
   } = props;
 
-  // Use the context as-is; do not re-declare its shape locally.
   const formCtx = React.useContext(DynamicFormContext);
   const ctx = formCtx as unknown as Record<string, unknown>;
 
-  // Pull required pieces from context (with safe guards)
   const FormData = hasKey(ctx, 'FormData') ? getKey<Record<string, unknown>>(ctx, 'FormData') : undefined;
   const FormMode = hasKey(ctx, 'FormMode') ? getKey<number>(ctx, 'FormMode') : undefined;
 
-  // These two must exist on the provider; we assert-read them
   const GlobalFormData = getKey<(id: string, value: unknown) => void>(ctx, 'GlobalFormData');
   const GlobalErrorHandle = getKey<(id: string, error: string | null) => void>(ctx, 'GlobalErrorHandle');
 
@@ -183,28 +139,21 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const isFile = type === 'file';
 
   const disabledFromCtx = getCtxFlag(ctx, ['isDisabled', 'disabled', 'formDisabled', 'Disabled']);
-
-  // Disabled/hidden lists (optional on context)
   const AllDisabledFields = hasKey(ctx, 'AllDisabledFields') ? ctx.AllDisabledFields : undefined;
   const AllHiddenFields = hasKey(ctx, 'AllHiddenFields') ? ctx.AllHiddenFields : undefined;
 
-  // Controlled flags
   const [isRequired, setIsRequired] = React.useState<boolean>(!!requiredProp);
   const [isDisabled, setIsDisabled] = React.useState<boolean>(
     isDisplayForm || disabledFromCtx || !!submitting || isListed(AllDisabledFields, displayName)
   );
   const [isHidden, setIsHidden] = React.useState<boolean>(isListed(AllHiddenFields, displayName));
 
-  // Value & validation state
   const [localVal, setLocalVal] = React.useState<string>('');
   const [error, setError] = React.useState<string>('');
   const [touched, setTouched] = React.useState<boolean>(false);
 
-  const inputId = useId('input');
-
   /* ---------- number helpers ---------- */
 
-  // CHANGED: treat both null and undefined as empty string for local display
   const valueToString = (v: unknown): string =>
     (v === null || v === undefined) ? '' : String(v);
 
@@ -284,24 +233,19 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   /* ---------- commit + error ---------- */
 
-  // GlobalFormData: ONLY on blur; empty → null (file mode commits the full name localVal)
   const commitValue = React.useCallback((val: string): void => {
     if (isNumber) {
       const t = val.trim();
-      // eslint-disable-next-line @rushstack/no-new-null
       GlobalFormData(id, t === '' ? null : (Number.isNaN(Number(t)) ? null : Number(t)));
     } else {
       const out = val.trim();
-      // eslint-disable-next-line @rushstack/no-new-null
       GlobalFormData(id, out === '' ? null : out);
     }
   }, [GlobalFormData, id, isNumber]);
 
-  // GlobalErrorHandle: only after first blur (touched)
   const pushErrorIfTouched = React.useCallback((msg: string): void => {
     setError(msg);
     if (touched) {
-      // eslint-disable-next-line @rushstack/no-new-null
       GlobalErrorHandle(id, msg === '' ? null : msg);
     }
   }, [GlobalErrorHandle, id, touched]);
@@ -312,7 +256,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     setIsRequired(!!requiredProp);
   }, [requiredProp]);
 
-  // Disabled/Hidden recompute
   React.useEffect((): void => {
     const fromMode = isDisplayForm;
     const fromCtx = disabledFromCtx;
@@ -324,7 +267,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     setIsHidden(fromHiddenList);
   }, [isDisplayForm, disabledFromCtx, AllDisabledFields, AllHiddenFields, displayName, submitting]);
 
-  // Prefill once on mount (New vs Edit). No global commits here.
   React.useEffect((): void => {
     if (FormMode === 8) {
       const initial = starterValue !== undefined ? valueToString(starterValue) : '';
@@ -346,7 +288,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       setTouched(false);
       pushErrorIfTouched(trimmed && decimalLimit !== undefined ? decimalLimitMsg(decimalLimit) : '');
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // initialize once
 
   /* ---------- handlers ---------- */
@@ -380,12 +321,11 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       const nextBase = input.value.slice(0, start) + insert + input.value.slice(end);
 
       if (isFile) {
-        // In file mode, recombine with the current extension for storage
         const { ext } = splitExt(localVal);
         const nextValue = nextBase === '' ? '' : `${nextBase}${ext}`;
         setLocalVal(nextValue);
       } else {
-        setLocalVal(nextBase); // local only
+        setLocalVal(nextBase);
       }
 
       pushErrorIfTouched(lengthMsg);
@@ -415,7 +355,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     if (isNumber) {
       const sanitized0 = sanitizeDecimal(raw);
       const { value: next, trimmed } = applyDecimalLimit(sanitized0);
-      setLocalVal(next); // local only
+      setLocalVal(next);
       if (trimmed && decimalLimit !== undefined) {
         pushErrorIfTouched(decimalLimitMsg(decimalLimit));
         return;
@@ -426,7 +366,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     }
 
     if (isFile) {
-      // User edits the base; we keep the stored value as base+ext.
+      // Editing base name only (extension rendered outside)
       const { ext } = splitExt(localVal);
       const recombined = raw === '' ? '' : `${raw}${ext}`;
       setLocalVal(recombined);
@@ -451,25 +391,20 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       (!isNumber && isDefined(maxLength) && (isFile ? splitExt(localVal).base.length : localVal.length) >= (maxLength ?? Infinity))
         ? lengthMsg
         : validate(isFile ? splitExt(localVal).base : localVal);
-    // update local + global error
     setError(finalError);
-    // eslint-disable-next-line @rushstack/no-new-null
     GlobalErrorHandle(id, finalError === '' ? null : finalError);
-    // single place we push to GlobalFormData (file mode commits full name)
     commitValue(localVal);
   };
 
   /* ---------- render ---------- */
 
-  // Build contentAfter: show file extension first, else keep % for numbers
   const extForAfter = isFile ? splitExt(localVal).ext : '';
   const after = (isFile && extForAfter)
-    ? <Text size={400} id={`${inputId}Ext`}>{extForAfter}</Text>
+    ? <Text size={400} id={`${id}Ext`}>{extForAfter}</Text>
     : (isNumber && contentAfter === 'percentage')
-      ? <Text size={400} id={`${inputId}Per`}>%</Text>
+      ? <Text size={400} id={`${id}Per`}>%</Text>
       : undefined;
 
-  // Display value: base when file mode, otherwise the raw localVal
   const displayValue = isFile ? splitExt(localVal).base : localVal;
 
   return (
@@ -481,8 +416,8 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
         validationState={error !== '' ? 'error' : undefined}
       >
         <Input
-          id={inputId}
-          name={id}
+          id={id} /* from props */
+          name={displayName} /* from props */
           className={className}
           placeholder={placeholder}
           value={displayValue}
