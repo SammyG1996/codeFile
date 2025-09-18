@@ -134,6 +134,11 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const GlobalFormData = getKey<(id: string, value: unknown) => void>(ctx, 'GlobalFormData');
   const GlobalErrorHandle = getKey<(id: string, error: string | null) => void>(ctx, 'GlobalErrorHandle');
 
+  // Optional GlobalRefs from context (boss can capture DOM refs)
+  const GlobalRefs = hasKey(ctx, 'GlobalRefs')
+    ? (getKey<(el: HTMLElement | undefined) => void>(ctx, 'GlobalRefs'))
+    : undefined;
+
   const isDisplayForm = FormMode === 4;
   const isNumber = type === 'number';
   const isFile = type === 'file';
@@ -151,6 +156,9 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const [localVal, setLocalVal] = React.useState<string>('');
   const [error, setError] = React.useState<string>('');
   const [touched, setTouched] = React.useState<boolean>(false);
+
+  // local ref to the actual <input> element
+  const elemRef = React.useRef<HTMLInputElement>(null);
 
   /* ---------- number helpers ---------- */
 
@@ -290,6 +298,14 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     }
   }, []); // initialize once
 
+  // Pass the ref to GlobalRefs (if provided in context)
+  React.useEffect(() => {
+    if (GlobalRefs) GlobalRefs(elemRef.current ?? undefined);
+    return () => {
+      if (GlobalRefs) GlobalRefs(undefined);
+    };
+  }, [GlobalRefs]);
+
   /* ---------- handlers ---------- */
 
   const getSelectionRange = (el: HTMLInputElement): { start: number; end: number } => {
@@ -416,6 +432,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
         validationState={error !== '' ? 'error' : undefined}
       >
         <Input
+          ref={elemRef}
           id={id} /* from props */
           name={displayName} /* from props */
           className={className}
