@@ -303,27 +303,38 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
   // EDIT/VIEW: always attempt to fetch existing AttachmentFiles using COLLECTION endpoint with $filter
   React.useEffect((): void | (() => void) => {
+    // 1) Mode must be Edit/View (not New)
     if (isNewMode) {
-      logAtt('skip fetch: NEW mode');
+      logAtt('fetch CONDITIONS:', { isNewMode, listTitle: undefined, itemId: undefined, canFetch: false });
+      logAtt('fetch SKIPPED (conditions not met): isNewMode === true (New form)');
       return;
     }
 
-    // 🔎 New: robust detection + clear logging of which key indicated attachments
+    // 2) FormData hint (just for visibility)
     const { value: fdHasAttachments, source } = readAttachmentsFlagLoose(FormData);
     logAtt('FormData attachments flag (loose):', { value: fdHasAttachments, source });
     logAtt('FormData keys:', FormData ? Object.keys(FormData) : 'no FormData');
 
+    // 3) Need both listTitle and itemId
     const { listTitle, itemId, shape } = getListTitleAndItemId(formCustomizerContext);
-    logAtt('SPFx ctx read:', { shape, listTitle, itemId, rawCtx: formCustomizerContext });
 
-    if (!listTitle || !itemId) {
-      logAtt('skip fetch: missing listTitle or itemId');
+    const canFetch = Boolean(!isNewMode && listTitle && itemId);
+    logAtt('fetch CONDITIONS:', { isNewMode, listTitle, itemId, shape, canFetch });
+
+    if (!canFetch) {
+      logAtt('fetch SKIPPED (conditions not met):', {
+        reason_isNewMode: isNewMode,
+        reason_missingListTitle: !listTitle,
+        reason_missingItemId: !itemId,
+      });
       return;
     }
 
+    logAtt('fetch TRIGGERED: all conditions satisfied');
+
     // ✅ Matches your instructions (collection + $filter + $select/$expand)
     const spUrl =
-      `/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items` +
+      `/_api/web/lists/getbytitle('${encodeURIComponent(listTitle as string)}')/items` +
       `?$filter=Id eq ${encodeURIComponent(String(itemId))}` +
       `&$select=AttachmentFiles&$expand=AttachmentFiles`;
 
