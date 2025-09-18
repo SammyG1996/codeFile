@@ -1,5 +1,5 @@
 /**
- * Example usage:
+ * Example usage (debugging ON by default):
  *
  * <FileUploadComponent
  *   id="attachments"
@@ -11,6 +11,7 @@
  *   isRequired={false}
  *   description="Add any supporting files."
  *   submitting={isSubmitting}
+ *   // debug={false}   // turn logs off later
  * />
  */
 
@@ -35,6 +36,8 @@ export interface FileUploadProps {
   description?: string;
   className?: string;
   submitting?: boolean;
+  /** Turn console logging on/off (defaults to true for diagnostics). */
+  debug?: boolean;
 }
 
 /** Minimal view of our form context. All fields optional on purpose. */
@@ -42,7 +45,6 @@ type FormCtxShape = {
   FormData?: Record<string, unknown>;
   FormMode?: number;
   GlobalFormData?: (id: string, value: unknown) => void;
-  // Allow undefined so we can avoid `null` writes per lint rule.
   GlobalErrorHandle?: (id: string, error: string | undefined) => void;
 
   // SPFx form context instance (sometimes provided as `.context`, sometimes direct)
@@ -127,27 +129,42 @@ const readBool = (obj: unknown, key: string): boolean => {
  *   1) context itself: { list: { title }, item: { ID } }
  *   2) wrapped:       { context: { list: { title }, item: { ID } } }
  */
-const getListTitleAndItemId = (ctx: unknown): { listTitle?: string; itemId?: number } => {
-  const root =
-    ctx && typeof ctx === 'object' && hasKey(ctx as Record<string, unknown>, 'context')
-      ? (ctx as { context: unknown }).context
-      : ctx;
+const getListTitleAndItemId = (ctx: unknown): { listTitle?: string; itemId?: number; shape: 'direct' | 'wrapped' | 'unknown' } => {
+  if (ctx && typeof ctx === 'object' && hasKey(ctx as Record<string, unknown>, 'context')) {
+    const root = (ctx as { context: unknown }).context;
+    if (!root || typeof root !== 'object') return { shape: 'wrapped' };
+    const listTitle =
+      hasKey(root as Record<string, unknown>, 'list') &&
+      typeof (root as { list?: { title?: unknown } }).list?.title === 'string'
+        ? ((root as { list?: { title?: string } }).list!.title as string)
+        : undefined;
 
-  if (!root || typeof root !== 'object') return {};
+    const itemId =
+      hasKey(root as Record<string, unknown>, 'item') &&
+      typeof (root as { item?: { ID?: unknown } }).item?.ID === 'number'
+        ? ((root as { item?: { ID?: number } }).item!.ID as number)
+        : undefined;
 
-  const listTitle =
-    hasKey(root as Record<string, unknown>, 'list') &&
-    typeof (root as { list?: { title?: unknown } }).list?.title === 'string'
-      ? ((root as { list?: { title?: string } }).list!.title as string)
-      : undefined;
+    return { listTitle, itemId, shape: 'wrapped' };
+  }
 
-  const itemId =
-    hasKey(root as Record<string, unknown>, 'item') &&
-    typeof (root as { item?: { ID?: unknown } }).item?.ID === 'number'
-      ? ((root as { item?: { ID?: number } }).item!.ID as number)
-      : undefined;
+  if (ctx && typeof ctx === 'object') {
+    const listTitle =
+      hasKey(ctx as Record<string, unknown>, 'list') &&
+      typeof (ctx as { list?: { title?: unknown } }).list?.title === 'string'
+        ? ((ctx as { list?: { title?: string } }).list!.title as string)
+        : undefined;
 
-  return { listTitle, itemId };
+    const itemId =
+      hasKey(ctx as Record<string, unknown>, 'item') &&
+      typeof (ctx as { item?: { ID?: unknown } }).item?.ID === 'number'
+        ? ((ctx as { item?: { ID?: number } }).item!.ID as number)
+        : undefined;
+
+    return { listTitle, itemId, shape: 'direct' };
+  }
+
+  return { shape: 'unknown' };
 };
 
 /* ------------------------------ Component ------------------------------ */
@@ -164,10 +181,20 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     description = '',
     className,
     submitting,
+    debug = true,
   } = props;
+
+  const log = (...args: unknown[]): void => {
+    if (!debug) return;
+    // eslint-disable-next-line no-console
+    console.log('%c[%cFileUpload%c]', 'color:#888', 'color:#0b6', 'color:#888', ...args);
+  };
+
+  log('mount: props =', { id, displayName, multiple, accept, maxFileSizeMB, maxFiles, isRequired, submitting });
 
   // Context (typed to our minimal shape)
   const raw = React.useContext(DynamicFormContext) as unknown as FormCtxShape;
+  log('context snapshot:', raw);
 
   const FormData = raw.FormData;
   const FormMode = raw.FormMode;
@@ -179,6 +206,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
   const isDisplayForm = FormMode === 4; // VIEW
   const isNewMode = FormMode === 8; // NEW
+  log('modes => { FormMode, isDisplayForm, isNewMode }', { FormMode, isDisplayForm, isNewMode });
 
   const disabledFromCtx = getCtxFlag(raw as Record<string, unknown>, [
     'isDisabled',
@@ -225,43 +253,60 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
     setIsDisabled(fromMode || fromCtx || fromDisabledList || fromSubmitting);
     setIsHidden(fromHiddenList);
+
+    log('recompute flags:', {
+      fromMode,
+      fromCtx,
+      fromSubmitting,
+      fromDisabledList,
+      fromHiddenList,
+      isDisabled: fromMode || fromCtx || fromDisabledList || fromSubmitting,
+      isHidden: fromHiddenList,
+    });
   }, [isDisplayForm, disabledFromCtx, AllDisabledFields, AllHiddenFields, displayName, submitting]);
 
-  // EDIT/VIEW: fetch existing AttachmentFiles ONLY if FormData.attachments === true
+  // EDIT/VIEW: always attempt to fetch existing AttachmentFiles
   React.useEffect((): void | (() => void) => {
-    if (isNewMode) return;
-
-    const hasAttachmentsFlag = readBool(FormData, 'attachments');
-    if (!hasAttachmentsFlag) {
-      setSpAttachments(undefined);
-      setLoadError('');
+    if (isNewMode) {
+      log('skip fetch: NEW mode');
       return;
     }
 
-    const { listTitle, itemId } = getListTitleAndItemId(formCustomizerContext);
-    if (!listTitle || !itemId) return;
+    const attachmentsFlag = readBool(FormData, 'attachments');
+    log('Edit/View: FormData.attachments =', attachmentsFlag);
 
+    const { listTitle, itemId, shape } = getListTitleAndItemId(formCustomizerContext);
+    log('SPFx ctx read:', { shape, listTitle, itemId, rawCtx: formCustomizerContext });
+
+    if (!listTitle || !itemId) {
+      log('skip fetch: missing listTitle or itemId');
+      return;
+    }
+
+    // Use single-item endpoint for predictable shape
     const spUrl =
-      `/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items` +
-      `?$filter=Id eq ${encodeURIComponent(String(itemId))}` +
-      `&$select=AttachmentFiles&$expand=AttachmentFiles`;
+      `/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items(${encodeURIComponent(
+        String(itemId)
+      )})?$select=AttachmentFiles&$expand=AttachmentFiles`;
 
     let cancelled = false;
 
     (async (): Promise<void> => {
       setLoadingSP(true);
       setLoadError('');
+      log('fetch START:', spUrl);
+
       try {
         const respUnknown: unknown = await getFetchAPI({
           spUrl,
           method: 'GET',
           headers: { Accept: 'application/json;odata=nometadata' },
         });
+        log('fetch RESPONSE (raw):', respUnknown);
 
-        // rows -> firstRow -> firstRow.AttachmentFiles (use dot notation by narrowing)
-        const rows = ((respUnknown as { value?: unknown[] } | null)?.value ?? []) as unknown[];
-        const firstRow = Array.isArray(rows) ? (rows[0] as { AttachmentFiles?: unknown }) : undefined;
-        const attsRaw = firstRow?.AttachmentFiles;
+        // Expect single item object with AttachmentFiles array
+        const attsRaw = (respUnknown as { AttachmentFiles?: unknown } | null)?.AttachmentFiles;
+        log('fetch RESPONSE AttachmentFiles (raw):', attsRaw);
 
         const atts: SPAttachment[] = Array.isArray(attsRaw)
           ? attsRaw
@@ -278,22 +323,30 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
               .filter((x): x is SPAttachment => x !== undefined)
           : [];
 
-        if (!cancelled) setSpAttachments(atts);
+        if (!cancelled) {
+          setSpAttachments(atts);
+          log('fetch SUCCESS: parsed attachments =', atts);
+        }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : 'Failed to load attachments.';
         if (!cancelled) {
           setSpAttachments(undefined);
           setLoadError(msg);
+          log('fetch ERROR:', msg, e);
         }
       } finally {
-        if (!cancelled) setLoadingSP(false);
+        if (!cancelled) {
+          setLoadingSP(false);
+          log('fetch FINISH');
+        }
       }
-    })().catch(() => {
-      // Promise is handled; no-floating-promises satisfied without using `void`.
+    })().catch(err => {
+      log('fetch PROMISE catch (should not happen due to try/catch):', err);
     });
 
     return (): void => {
       cancelled = true;
+      log('effect cleanup: cancelled fetch');
     };
   }, [isNewMode, formCustomizerContext, FormData]);
 
@@ -320,28 +373,35 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
   const commitValue = React.useCallback(
     (list: File[]): void => {
-      // write `undefined` instead of `null` to satisfy @rushstack/no-new-null
-      GlobalFormData(id, list.length === 0 ? undefined : isSingleSelection ? list[0] : list);
+      const payload = list.length === 0 ? undefined : isSingleSelection ? list[0] : list;
+      log('commitValue -> GlobalFormData:', { id, payload });
+      GlobalFormData(id, payload);
     },
-    [GlobalFormData, id, isSingleSelection]
+    [GlobalFormData, id, isSingleSelection, log]
   );
 
   /* ---------- handlers ---------- */
 
   const openPicker = (): void => {
+    log('openPicker click');
     if (!isDisabled) inputRef.current?.click();
+    else log('openPicker prevented: isDisabled');
   };
 
   const onFilesPicked: React.ChangeEventHandler<HTMLInputElement> = (e): void => {
     const picked = Array.from(e.currentTarget.files ?? []);
+    log('onFilesPicked:', picked.map(f => ({ name: f.name, size: f.size, type: f.type })));
+
     let next: File[] = [];
     let msg = '';
 
     if (isSingleSelection) {
       next = picked.slice(0, 1);
+      log('single selection -> taking first file only');
     } else {
       const already = files.length;
       const capacity = isDefined(maxFiles) ? Math.max(0, maxFiles - already) : picked.length;
+      log('multi selection -> already:', already, 'capacity:', capacity);
 
       if (already === 0) {
         const toTake = isDefined(maxFiles) ? Math.min(picked.length, maxFiles) : picked.length;
@@ -359,6 +419,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     }
 
     if (!msg) msg = validateSelection(next);
+    log('selection after apply:', next.map(f => f.name), 'validation msg:', msg);
 
     setFiles(next);
     setError(msg);
@@ -371,6 +432,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
   const removeAt = React.useCallback(
     (idx: number): void => {
+      log('removeAt index:', idx);
       const next = files.filter((_, i) => i !== idx);
       const msg = validateSelection(next);
 
@@ -379,7 +441,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       GlobalErrorHandle(id, msg === '' ? undefined : msg);
       commitValue(next);
     },
-    [files, validateSelection, GlobalErrorHandle, id, commitValue]
+    [files, validateSelection, GlobalErrorHandle, id, commitValue, log]
   );
 
   const handleRemove = React.useCallback(
@@ -389,6 +451,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   );
 
   const clearAll = (): void => {
+    log('clearAll');
     const msg = required ? REQUIRED_MSG : '';
     setFiles([]);
     setError(msg);
@@ -399,7 +462,12 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
   /* ---------- render ---------- */
 
-  if (isHidden) return <div hidden className="fieldClass" />;
+  if (isHidden) {
+    log('render: hidden');
+    return <div hidden className="fieldClass" />;
+  }
+
+  log('render: visible', { filesCount: files.length, error, isDisabled });
 
   return (
     <div className="fieldClass">
@@ -409,7 +477,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
         validationMessage={error || undefined}
         validationState={error ? 'error' : undefined}
       >
-        {/* Existing attachments (Edit/View only, and only if item has attachments) */}
+        {/* Existing attachments (Edit/View only) */}
         {!isNewMode && (
           <div style={{ marginBottom: 8 }}>
             {loadingSP && <Text size={200}>Loading attachments…</Text>}
