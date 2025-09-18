@@ -129,7 +129,9 @@ const readBool = (obj: unknown, key: string): boolean => {
  *   1) context itself: { list: { title }, item: { ID } }
  *   2) wrapped:       { context: { list: { title }, item: { ID } } }
  */
-const getListTitleAndItemId = (ctx: unknown): { listTitle?: string; itemId?: number; shape: 'direct' | 'wrapped' | 'unknown' } => {
+const getListTitleAndItemId = (
+  ctx: unknown
+): { listTitle?: string; itemId?: number; shape: 'direct' | 'wrapped' | 'unknown' } => {
   if (ctx && typeof ctx === 'object' && hasKey(ctx as Record<string, unknown>, 'context')) {
     const root = (ctx as { context: unknown }).context;
     if (!root || typeof root !== 'object') return { shape: 'wrapped' };
@@ -188,6 +190,12 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     if (!debug) return;
     // eslint-disable-next-line no-console
     console.log('%c[%cFileUpload%c]', 'color:#888', 'color:#0b6', 'color:#888', ...args);
+  };
+
+  const logAtt = (...args: unknown[]): void => {
+    if (!debug) return;
+    // eslint-disable-next-line no-console
+    console.log('%c[%cFileUpload%c] %cATTACHMENTS', 'color:#888', 'color:#0b6', 'color:#888', 'color:#06c;font-weight:bold', ...args);
   };
 
   log('mount: props =', { id, displayName, multiple, accept, maxFileSizeMB, maxFiles, isRequired, submitting });
@@ -265,25 +273,25 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     });
   }, [isDisplayForm, disabledFromCtx, AllDisabledFields, AllHiddenFields, displayName, submitting]);
 
-  // EDIT/VIEW: always attempt to fetch existing AttachmentFiles
+  // EDIT/VIEW: always attempt to fetch existing AttachmentFiles (single-item endpoint)
   React.useEffect((): void | (() => void) => {
     if (isNewMode) {
-      log('skip fetch: NEW mode');
+      logAtt('skip fetch: NEW mode');
       return;
     }
 
     const attachmentsFlag = readBool(FormData, 'attachments');
-    log('Edit/View: FormData.attachments =', attachmentsFlag);
+    logAtt('Edit/View: FormData.attachments =', attachmentsFlag);
 
     const { listTitle, itemId, shape } = getListTitleAndItemId(formCustomizerContext);
-    log('SPFx ctx read:', { shape, listTitle, itemId, rawCtx: formCustomizerContext });
+    logAtt('SPFx ctx read:', { shape, listTitle, itemId, rawCtx: formCustomizerContext });
 
     if (!listTitle || !itemId) {
-      log('skip fetch: missing listTitle or itemId');
+      logAtt('skip fetch: missing listTitle or itemId');
       return;
     }
 
-    // Use single-item endpoint for predictable shape
+    // Single item endpoint => predictable shape { AttachmentFiles: [...] }
     const spUrl =
       `/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items(${encodeURIComponent(
         String(itemId)
@@ -294,7 +302,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     (async (): Promise<void> => {
       setLoadingSP(true);
       setLoadError('');
-      log('fetch START:', spUrl);
+      logAtt('fetch START:', spUrl);
 
       try {
         const respUnknown: unknown = await getFetchAPI({
@@ -302,11 +310,10 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           method: 'GET',
           headers: { Accept: 'application/json;odata=nometadata' },
         });
-        log('fetch RESPONSE (raw):', respUnknown);
+        logAtt('fetch RESPONSE (raw):', respUnknown);
 
-        // Expect single item object with AttachmentFiles array
         const attsRaw = (respUnknown as { AttachmentFiles?: unknown } | null)?.AttachmentFiles;
-        log('fetch RESPONSE AttachmentFiles (raw):', attsRaw);
+        logAtt('fetch RESPONSE AttachmentFiles (raw):', attsRaw);
 
         const atts: SPAttachment[] = Array.isArray(attsRaw)
           ? attsRaw
@@ -325,30 +332,58 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
         if (!cancelled) {
           setSpAttachments(atts);
-          log('fetch SUCCESS: parsed attachments =', atts);
+          if (atts.length > 0) {
+            logAtt(`fetch SUCCESS: ${atts.length} attachment(s) found`, atts);
+          } else {
+            logAtt('fetch SUCCESS: 0 attachments found');
+          }
         }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : 'Failed to load attachments.';
         if (!cancelled) {
           setSpAttachments(undefined);
           setLoadError(msg);
-          log('fetch ERROR:', msg, e);
+          logAtt('fetch ERROR:', msg, e);
         }
       } finally {
         if (!cancelled) {
           setLoadingSP(false);
-          log('fetch FINISH');
+          logAtt('fetch FINISH');
         }
       }
     })().catch(err => {
-      log('fetch PROMISE catch (should not happen due to try/catch):', err);
+      logAtt('fetch PROMISE catch (should not happen due to try/catch):', err);
     });
 
     return (): void => {
       cancelled = true;
-      log('effect cleanup: cancelled fetch');
+      logAtt('effect cleanup: cancelled fetch');
     };
   }, [isNewMode, formCustomizerContext, FormData]);
+
+  // 🔎 Anytime attachment state changes, log a clear status message
+  React.useEffect((): void => {
+    if (loadingSP) {
+      logAtt('state change: loadingSP=true...');
+      return;
+    }
+    if (loadError) {
+      logAtt('state change: loadError ->', loadError);
+      return;
+    }
+    if (Array.isArray(spAttachments)) {
+      if (spAttachments.length > 0) {
+        logAtt(
+          `state change: ATTACHMENTS PRESENT (${spAttachments.length})`,
+          spAttachments.map(a => ({ name: a.FileName, url: a.ServerRelativeUrl }))
+        );
+      } else {
+        logAtt('state change: NO attachments (empty array)');
+      }
+    } else {
+      logAtt('state change: attachments undefined (not loaded or fetch skipped/failed)');
+    }
+  }, [spAttachments, loadingSP, loadError]);
 
   /* ---------- validation & commit ---------- */
 
@@ -487,41 +522,47 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
               </Text>
             )}
             {!loadingSP && !loadError && Array.isArray(spAttachments) && spAttachments.length > 0 && (
-              <div style={{ display: 'grid', gap: 6 }}>
-                {spAttachments.map((a, i) => (
-                  <div
-                    key={`${a.ServerRelativeUrl}-${i}`}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      padding: '6px 10px',
-                      borderRadius: 8,
-                      border: '1px solid var(--colorNeutralStroke1)',
-                    }}
-                  >
-                    <DocumentRegular />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div
-                        style={{
-                          fontWeight: 500,
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                        }}
-                      >
-                        <Link href={a.ServerRelativeUrl} target="_blank" rel="noreferrer">
-                          {a.FileName}
-                        </Link>
+              <>
+                {logAtt('render: showing attachments list (count=%d)', spAttachments.length)}
+                <div style={{ display: 'grid', gap: 6 }}>
+                  {spAttachments.map((a, i) => (
+                    <div
+                      key={`${a.ServerRelativeUrl}-${i}`}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '6px 10px',
+                        borderRadius: 8,
+                        border: '1px solid var(--colorNeutralStroke1)',
+                      }}
+                    >
+                      <DocumentRegular />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div
+                          style={{
+                            fontWeight: 500,
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          }}
+                        >
+                          <Link href={a.ServerRelativeUrl} target="_blank" rel="noreferrer">
+                            {a.FileName}
+                          </Link>
+                        </div>
+                        <Text size={200}>{a.ServerRelativeUrl}</Text>
                       </div>
-                      <Text size={200}>{a.ServerRelativeUrl}</Text>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              </>
             )}
             {!loadingSP && !loadError && Array.isArray(spAttachments) && spAttachments.length === 0 && (
-              <Text size={200}>No existing attachments.</Text>
+              <>
+                {logAtt('render: no attachments to show (empty array)')}
+                <Text size={200}>No existing attachments.</Text>
+              </>
             )}
           </div>
         )}
