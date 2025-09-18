@@ -124,6 +124,28 @@ const readBool = (obj: unknown, key: string): boolean => {
 };
 
 /**
+ * Robustly infer whether FormData indicates the item has attachments.
+ * Checks common shapes and returns BOTH the boolean and what key triggered it.
+ */
+const readAttachmentsFlagLoose = (
+  obj: unknown
+): { value: boolean; source: 'attachments' | 'Attachments' | 'AttachmentFiles' | 'attachmentFiles' | 'count' | 'none' } => {
+  if (!obj || typeof obj !== 'object') return { value: false, source: 'none' };
+  const o = obj as Record<string, unknown>;
+
+  if (typeof o.attachments === 'boolean') return { value: o.attachments, source: 'attachments' };
+  if (typeof o.Attachments === 'boolean') return { value: o.Attachments, source: 'Attachments' };
+
+  if (Array.isArray(o.AttachmentFiles)) return { value: o.AttachmentFiles.length > 0, source: 'AttachmentFiles' };
+  if (Array.isArray(o.attachmentFiles)) return { value: o.attachmentFiles.length > 0, source: 'attachmentFiles' };
+
+  if (typeof o.attachments === 'number') return { value: (o.attachments as number) > 0, source: 'count' };
+  if (typeof o.Attachments === 'number') return { value: (o.Attachments as number) > 0, source: 'count' };
+
+  return { value: false, source: 'none' };
+};
+
+/**
  * Safely read list title & item ID from the provided SPFx Form Customizer context.
  * Supports both shapes:
  *   1) context itself: { list: { title }, item: { ID } }
@@ -286,9 +308,10 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       return;
     }
 
-    const attachmentsFlagLower = readBool(FormData, 'attachments');
-    const attachmentsFlagUpper = readBool(FormData, 'Attachments');
-    logAtt('Edit/View: FormData.attachments =', attachmentsFlagLower, 'FormData.Attachments =', attachmentsFlagUpper);
+    // 🔎 New: robust detection + clear logging of which key indicated attachments
+    const { value: fdHasAttachments, source } = readAttachmentsFlagLoose(FormData);
+    logAtt('FormData attachments flag (loose):', { value: fdHasAttachments, source });
+    logAtt('FormData keys:', FormData ? Object.keys(FormData) : 'no FormData');
 
     const { listTitle, itemId, shape } = getListTitleAndItemId(formCustomizerContext);
     logAtt('SPFx ctx read:', { shape, listTitle, itemId, rawCtx: formCustomizerContext });
@@ -579,8 +602,8 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
         {/* Hidden native input (triggered by the button) */}
         <input
-          id={id}                 // 🔁 use the id from props
-          name={displayName}      // 🔁 set name to displayName (as requested)
+          id={id}            /* use id from props */
+          name={displayName} /* set name to displayName */
           ref={inputRef}
           type="file"
           multiple={!isSingleSelection}
