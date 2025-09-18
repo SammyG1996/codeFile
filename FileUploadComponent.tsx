@@ -16,7 +16,7 @@
  */
 
 import * as React from 'react';
-import { Field, Button, Text, useId, Link } from '@fluentui/react-components';
+import { Field, Button, Text, Link } from '@fluentui/react-components';
 import { DismissRegular, DocumentRegular, AttachRegular } from '@fluentui/react-icons';
 import { DynamicFormContext } from './DynamicFormContext';
 
@@ -195,7 +195,14 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   const logAtt = (...args: unknown[]): void => {
     if (!debug) return;
     // eslint-disable-next-line no-console
-    console.log('%c[%cFileUpload%c] %cATTACHMENTS', 'color:#888', 'color:#0b6', 'color:#888', 'color:#06c;font-weight:bold', ...args);
+    console.log(
+      '%c[%cFileUpload%c] %cATTACHMENTS',
+      'color:#888',
+      'color:#0b6',
+      'color:#888',
+      'color:#06c;font-weight:bold',
+      ...args
+    );
   };
 
   log('mount: props =', { id, displayName, multiple, accept, maxFileSizeMB, maxFiles, isRequired, submitting });
@@ -240,7 +247,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   const [loadingSP, setLoadingSP] = React.useState<boolean>(false);
   const [loadError, setLoadError] = React.useState<string>('');
 
-  const inputId = useId('file');
   const inputRef = React.useRef<HTMLInputElement>(null);
 
   // Single vs multi selection
@@ -273,15 +279,16 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     });
   }, [isDisplayForm, disabledFromCtx, AllDisabledFields, AllHiddenFields, displayName, submitting]);
 
-  // EDIT/VIEW: always attempt to fetch existing AttachmentFiles (single-item endpoint)
+  // EDIT/VIEW: always attempt to fetch existing AttachmentFiles using COLLECTION endpoint with $filter
   React.useEffect((): void | (() => void) => {
     if (isNewMode) {
       logAtt('skip fetch: NEW mode');
       return;
     }
 
-    const attachmentsFlag = readBool(FormData, 'attachments');
-    logAtt('Edit/View: FormData.attachments =', attachmentsFlag);
+    const attachmentsFlagLower = readBool(FormData, 'attachments');
+    const attachmentsFlagUpper = readBool(FormData, 'Attachments');
+    logAtt('Edit/View: FormData.attachments =', attachmentsFlagLower, 'FormData.Attachments =', attachmentsFlagUpper);
 
     const { listTitle, itemId, shape } = getListTitleAndItemId(formCustomizerContext);
     logAtt('SPFx ctx read:', { shape, listTitle, itemId, rawCtx: formCustomizerContext });
@@ -291,11 +298,11 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       return;
     }
 
-    // Single item endpoint => predictable shape { AttachmentFiles: [...] }
+    // ✅ Matches your instructions (collection + $filter + $select/$expand)
     const spUrl =
-      `/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items(${encodeURIComponent(
-        String(itemId)
-      )})?$select=AttachmentFiles&$expand=AttachmentFiles`;
+      `/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items` +
+      `?$filter=Id eq ${encodeURIComponent(String(itemId))}` +
+      `&$select=AttachmentFiles&$expand=AttachmentFiles`;
 
     let cancelled = false;
 
@@ -312,8 +319,11 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
         });
         logAtt('fetch RESPONSE (raw):', respUnknown);
 
-        const attsRaw = (respUnknown as { AttachmentFiles?: unknown } | null)?.AttachmentFiles;
-        logAtt('fetch RESPONSE AttachmentFiles (raw):', attsRaw);
+        // Collection shape: { value: [ { AttachmentFiles: [...] } ] }
+        const rows = ((respUnknown as { value?: unknown[] } | null)?.value ?? []) as unknown[];
+        const firstRow = Array.isArray(rows) ? (rows[0] as { AttachmentFiles?: unknown } | undefined) : undefined;
+        const attsRaw = firstRow?.AttachmentFiles;
+        logAtt('fetch RESPONSE firstRow.AttachmentFiles (raw):', attsRaw);
 
         const atts: SPAttachment[] = Array.isArray(attsRaw)
           ? attsRaw
@@ -569,7 +579,8 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
         {/* Hidden native input (triggered by the button) */}
         <input
-          id={inputId}
+          id={id}                 // 🔁 use the id from props
+          name={displayName}      // 🔁 set name to displayName (as requested)
           ref={inputRef}
           type="file"
           multiple={!isSingleSelection}
