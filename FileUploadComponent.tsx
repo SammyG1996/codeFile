@@ -23,8 +23,6 @@ import { Field, Button, Text, useId, Link } from '@fluentui/react-components';
 import { DismissRegular, DocumentRegular, AttachRegular } from '@fluentui/react-icons';
 import { DynamicFormContext } from './DynamicFormContext';
 
-// NOTE: we don't depend on the exact exported type anymore, because the instance
-// may be provided either as the context itself or wrapped under `.context`.
 import type { FormCustomizerContext as SPFxFormCustomizerContext } from '@microsoft/sp-listview-extensibility';
 import { getFetchAPI } from '../Utilis/getFetchApi';
 
@@ -50,7 +48,7 @@ type FormCtxShape = {
   GlobalFormData?: (id: string, value: unknown) => void;
   GlobalErrorHandle?: (id: string, error: string | null) => void;
 
-  // The SPFx form context instance, but we treat it as unknown for safety
+  // The SPFx form context instance (may be the context itself or wrapped under `.context`)
   FormCustomizerContext?: unknown;
 
   // optional flags/lists used by our field pattern
@@ -132,12 +130,11 @@ const readBool = (obj: unknown, key: string): boolean => {
  *   1) context itself: { list: { title }, item: { ID } }
  *   2) wrapped:       { context: { list: { title }, item: { ID } } }
  */
-const getListTitleAndItemId = (
-  ctx: unknown
-): { listTitle?: string; itemId?: number } => {
-  const root = (ctx && typeof ctx === 'object' && hasKey(ctx as Record<string, unknown>, 'context'))
-    ? (ctx as { context: unknown }).context
-    : ctx;
+const getListTitleAndItemId = (ctx: unknown): { listTitle?: string; itemId?: number } => {
+  const root =
+    ctx && typeof ctx === 'object' && hasKey(ctx as Record<string, unknown>, 'context')
+      ? (ctx as { context: unknown }).context
+      : ctx;
 
   if (!root || typeof root !== 'object') return {};
 
@@ -234,7 +231,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   }, [isDisplayForm, disabledFromCtx, AllDisabledFields, AllHiddenFields, displayName, submitting]);
 
   // EDIT/VIEW: fetch existing AttachmentFiles ONLY if FormData.attachments === true
-  React.useEffect((): void => {
+  React.useEffect((): void | (() => void) => {
     if (isNewMode) return;
 
     const hasAttachmentsFlag = readBool(FormData, 'attachments');
@@ -297,6 +294,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       }
     })();
 
+    // ✅ Explicitly type the cleanup return
     return (): void => {
       cancelled = true;
     };
@@ -375,18 +373,20 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     if (inputRef.current) inputRef.current.value = '';
   };
 
-  const removeAt = React.useCallback((idx: number): void => {
-    const next = files.filter((_, i) => i !== idx);
-    const msg = validateSelection(next);
+  const removeAt = React.useCallback(
+    (idx: number): void => {
+      const next = files.filter((_, i) => i !== idx);
+      const msg = validateSelection(next);
 
-    setFiles(next);
-    setError(msg);
-    // eslint-disable-next-line @rushstack/no-new-null
-    GlobalErrorHandle(id, msg === '' ? null : msg);
-    commitValue(next);
-  }, [files, validateSelection, GlobalErrorHandle, id, commitValue]);
+      setFiles(next);
+      setError(msg);
+      // eslint-disable-next-line @rushstack/no-new-null
+      GlobalErrorHandle(id, msg === '' ? null : msg);
+      commitValue(next);
+    },
+    [files, validateSelection, GlobalErrorHandle, id, commitValue]
+  );
 
-  // Properly typed handler factory to avoid “() => void is not assignable to void”
   const handleRemove = React.useCallback(
     (idx: number): React.MouseEventHandler<HTMLButtonElement> =>
       (): void => removeAt(idx),
