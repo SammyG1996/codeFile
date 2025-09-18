@@ -16,13 +16,6 @@
  * ——————————————————————————————————————————————————————————————————————
  *
  * FileUploadComponent.tsx
- *
- * High level:
- * - NEW mode (FormMode===8): show picker only; no SharePoint calls.
- * - EDIT/VIEW (FormMode!==8): if FormData.attachments === true, fetch and display AttachmentFiles.
- * - Writes to GlobalFormData / GlobalErrorHandle only on user actions.
- * - Multi-file: first pick can include many, subsequent picks append up to maxFiles.
- * - Single-file (multiple=false or maxFiles===1): replace.
  */
 
 import * as React from 'react';
@@ -30,7 +23,9 @@ import { Field, Button, Text, useId, Link } from '@fluentui/react-components';
 import { DismissRegular, DocumentRegular, AttachRegular } from '@fluentui/react-icons';
 import { DynamicFormContext } from './DynamicFormContext';
 
-import type { FormCustomizerContext } from '@microsoft/sp-listview-extensibility';
+// NOTE: we don't depend on the exact exported type anymore, because the instance
+// may be provided either as the context itself or wrapped under `.context`.
+import type { FormCustomizerContext as SPFxFormCustomizerContext } from '@microsoft/sp-listview-extensibility';
 import { getFetchAPI } from '../Utilis/getFetchApi';
 
 /* ------------------------------ Types ------------------------------ */
@@ -48,13 +43,15 @@ export interface FileUploadProps {
   submitting?: boolean;
 }
 
-/** Minimal, type-safe view of our form context. All fields are optional on purpose. */
+/** Minimal, type-safe view of our form context. All fields optional. */
 type FormCtxShape = {
   FormData?: Record<string, unknown>;
   FormMode?: number;
   GlobalFormData?: (id: string, value: unknown) => void;
   GlobalErrorHandle?: (id: string, error: string | null) => void;
-  FormCustomizerContext?: FormCustomizerContext;
+
+  // The SPFx form context instance, but we treat it as unknown for safety
+  FormCustomizerContext?: unknown;
 
   // optional flags/lists used by our field pattern
   isDisabled?: boolean;
@@ -129,6 +126,36 @@ const readBool = (obj: unknown, key: string): boolean => {
   return false;
 };
 
+/**
+ * Safely read list title & item ID from the provided SPFx Form Customizer context.
+ * Supports both shapes:
+ *   1) context itself: { list: { title }, item: { ID } }
+ *   2) wrapped:       { context: { list: { title }, item: { ID } } }
+ */
+const getListTitleAndItemId = (
+  ctx: unknown
+): { listTitle?: string; itemId?: number } => {
+  const root = (ctx && typeof ctx === 'object' && hasKey(ctx as Record<string, unknown>, 'context'))
+    ? (ctx as { context: unknown }).context
+    : ctx;
+
+  if (!root || typeof root !== 'object') return {};
+
+  const listTitle =
+    hasKey(root as Record<string, unknown>, 'list') &&
+    typeof (root as { list?: { title?: unknown } }).list?.title === 'string'
+      ? ((root as { list?: { title?: string } }).list!.title as string)
+      : undefined;
+
+  const itemId =
+    hasKey(root as Record<string, unknown>, 'item') &&
+    typeof (root as { item?: { ID?: unknown } }).item?.ID === 'number'
+      ? ((root as { item?: { ID?: number } }).item!.ID as number)
+      : undefined;
+
+  return { listTitle, itemId };
+};
+
 /* ------------------------------ Component ------------------------------ */
 
 export default function FileUploadComponent(props: FileUploadProps): JSX.Element {
@@ -152,7 +179,9 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   const FormMode = raw.FormMode;
   const GlobalFormData = raw.GlobalFormData as (id: string, value: unknown) => void;
   const GlobalErrorHandle = raw.GlobalErrorHandle as (id: string, error: string | null) => void;
-  const formCustomizerContext = raw.FormCustomizerContext;
+
+  // Treat this as unknown, we’ll safely read the fields we need
+  const formCustomizerContext: unknown = raw.FormCustomizerContext as unknown as SPFxFormCustomizerContext | unknown;
 
   const isDisplayForm = FormMode === 4; // VIEW
   const isNewMode = FormMode === 8; // NEW
@@ -215,8 +244,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       return;
     }
 
-    const listTitle = formCustomizerContext?.context?.list?.title;
-    const itemId = formCustomizerContext?.context?.item?.ID;
+    const { listTitle, itemId } = getListTitleAndItemId(formCustomizerContext);
     if (!listTitle || !itemId) return;
 
     const spUrl =
@@ -347,7 +375,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     if (inputRef.current) inputRef.current.value = '';
   };
 
-  const removeAt = (idx: number): void => {
+  const removeAt = React.useCallback((idx: number): void => {
     const next = files.filter((_, i) => i !== idx);
     const msg = validateSelection(next);
 
@@ -356,7 +384,14 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     // eslint-disable-next-line @rushstack/no-new-null
     GlobalErrorHandle(id, msg === '' ? null : msg);
     commitValue(next);
-  };
+  }, [files, validateSelection, GlobalErrorHandle, id, commitValue]);
+
+  // Properly typed handler factory to avoid “() => void is not assignable to void”
+  const handleRemove = React.useCallback(
+    (idx: number): React.MouseEventHandler<HTMLButtonElement> =>
+      (): void => removeAt(idx),
+    [removeAt]
+  );
 
   const clearAll = (): void => {
     const msg = required ? REQUIRED_MSG : '';
@@ -506,7 +541,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                 <Button
                   size="small"
                   icon={<DismissRegular />}
-                  onClick={(): void => removeAt(i)}
+                  onClick={handleRemove(i)}
                   disabled={isDisabled}
                   aria-label={`Remove ${f.name}`}
                 />
