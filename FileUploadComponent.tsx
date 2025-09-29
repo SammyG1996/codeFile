@@ -1,29 +1,39 @@
 /**
- * Example usage (debugging ON by default):
+ * FileUploadComponent.tsx
  *
+ * Example usage:
  * <FileUploadComponent
- *   id="attachments"
+ *   id="Attachments"
  *   displayName="Attachments"
  *   multiple
  *   accept=".pdf,.doc,.docx,image/*"
- *   maxFiles={10}
+ *   maxFiles={5}
  *   maxFileSizeMB={15}
  *   isRequired={false}
  *   description="Add any supporting files."
  *   submitting={isSubmitting}
- *   // debug={false}   // turn logs off later
+ *   context={props.context} // SPFx FormCustomizerContext
  * />
+ *
+ * Behavior (summary)
+ * - In NEW mode (FormMode===8): no SharePoint fetch for existing attachments (no item yet).
+ * - In EDIT/VIEW: we only fetch existing attachments when DynamicFormContext.FormData.Attachments === true.
+ * - Selection:
+ *     · Single mode (maxFiles===1 or multiple=false): take first file.
+ *     · Multi mode: allow initial multi-select + “Add more files” until maxFiles.
+ *     · Validates per-file size and max file count (if provided).
+ * - Commits to GlobalFormData immediately on selection/removal:
+ *     · If empty => undefined
+ *     · Single => File
+ *     · Multi  => File[]
+ * - Renders existing attachments list (name + link) in Edit/View when present.
  */
 
 import * as React from 'react';
 import { Field, Button, Text, Link } from '@fluentui/react-components';
 import { DismissRegular, DocumentRegular, AttachRegular } from '@fluentui/react-icons';
 import { DynamicFormContext } from './DynamicFormContext';
-
-// 👇 YOUR app's React context that exposes SPFx-like info (list, item, etc.)
-//    Update this import path to wherever your provider lives.
-import { FormCustomizerContext } from '../contexts/FormCustomizerContext';
-
+import type { FormCustomizerContext } from '@microsoft/sp-listview-extensibility';
 import { getFetchAPI } from '../Utilis/getFetchApi';
 
 /* ------------------------------ Types ------------------------------ */
@@ -39,18 +49,17 @@ export interface FileUploadProps {
   description?: string;
   className?: string;
   submitting?: boolean;
-  /** Turn console logging on/off (defaults to true for diagnostics). */
-  debug?: boolean;
+  /** SPFx Form Customizer context – used to build the REST URL */
+  context?: FormCustomizerContext;
 }
 
-/** Minimal view of our form context. All fields optional on purpose. */
 type FormCtxShape = {
   FormData?: Record<string, unknown>;
   FormMode?: number;
-  GlobalFormData?: (id: string, value: unknown) => void;
-  GlobalErrorHandle?: (id: string, error: string | undefined) => void;
+  GlobalFormData: (id: string, value: unknown) => void;
+  GlobalErrorHandle: (id: string, error: string | undefined) => void;
 
-  // optional flags/lists used by our field pattern
+  // optional flags/lists
   isDisabled?: boolean;
   disabled?: boolean;
   formDisabled?: boolean;
@@ -71,13 +80,9 @@ const TOO_MANY_MSG = (limit: number): string =>
 
 const isDefined = <T,>(v: T | undefined): v is T => v !== undefined;
 
-const hasKey = (o: Record<string, unknown>, k: string): boolean =>
-  Object.prototype.hasOwnProperty.call(o, k);
-
 const getCtxFlag = (o: Record<string, unknown>, keys: string[]): boolean =>
-  keys.some(k => hasKey(o, k) && Boolean(o[k]));
+  keys.some(k => Object.prototype.hasOwnProperty.call(o, k) && Boolean(o[k]));
 
-/** Accepts array, Set, comma-string, or object-map and checks membership of displayName */
 const isListed = (bag: unknown, name: string): boolean => {
   const needle = name.trim().toLowerCase();
   if (bag === null || bag === undefined) return false;
@@ -115,112 +120,17 @@ const formatBytes = (bytes: number): string => {
   return `${Number.isInteger(n) ? n.toFixed(0) : n.toFixed(2)} ${units[i]}`;
 };
 
-/**
- * Robustly infer whether FormData indicates the item has attachments.
- * Checks common shapes and returns BOTH the boolean and what key triggered it.
- */
-const readAttachmentsFlagLoose = (
-  obj: unknown
-): { value: boolean; source: 'attachments' | 'Attachments' | 'AttachmentFiles' | 'attachmentFiles' | 'count' | 'none' } => {
-  if (!obj || typeof obj !== 'object') return { value: false, source: 'none' };
-  const o = obj as Record<string, unknown>;
-
-  if (typeof o.attachments === 'boolean') return { value: o.attachments, source: 'attachments' };
-  if (typeof o.Attachments === 'boolean') return { value: o.Attachments, source: 'Attachments' };
-
-  if (Array.isArray(o.AttachmentFiles)) return { value: o.AttachmentFiles.length > 0, source: 'AttachmentFiles' };
-  if (Array.isArray(o.attachmentFiles)) return { value: o.attachmentFiles.length > 0, source: 'attachmentFiles' };
-
-  if (typeof o.attachments === 'number') return { value: (o.attachments as number) > 0, source: 'count' };
-  if (typeof o.Attachments === 'number') return { value: (o.Attachments as number) > 0, source: 'count' };
-
-  return { value: false, source: 'none' };
-};
-
-/**
- * Tries VERY HARD to find listTitle and itemId across BOTH contexts and FormData.
- * Priority:
- *   1) Your dedicated React FormCustomizerContext (wrapped & direct shapes)
- *   2) DynamicFormContext (some apps mirror values here)
- *   3) FormData (ID often lives here)
- */
-const getListTitleAndItemIdLoose = (
-  fcCtxValue: unknown,            // value from your FormCustomizerContext
-  dynamicCtxValue: unknown,       // the whole DynamicFormContext object
-  formData: unknown               // FormData from DynamicFormContext
-): {
-  listTitle?: string;
-  itemId?: number;
-  source: string;
-} => {
-  const pickNum = (v: unknown): number | undefined => {
-    if (typeof v === 'number' && Number.isFinite(v)) return v;
-    if (typeof v === 'string' && /^\d+$/.test(v)) return Number(v);
-    return undefined;
-  };
-  const pickStr = (v: unknown): string | undefined =>
-    typeof v === 'string' && v.trim() ? v : undefined;
-
-  const tryPaths = (obj: unknown, paths: string[]): unknown => {
-    if (!obj || typeof obj !== 'object') return undefined;
-    for (const p of paths) {
-      const parts = p.split('.');
-      let cur: any = obj;
-      let ok = true;
-      for (const part of parts) {
-        if (cur && typeof cur === 'object' && part in cur) cur = cur[part];
-        else { ok = false; break; }
-      }
-      if (ok) return cur;
-    }
-    return undefined;
-  };
-
-  // 1) Your dedicated FormCustomizerContext (wrapped + direct)
-  const titleFromFC = pickStr(
-    tryPaths(fcCtxValue, [
-      'context.list.title', // wrapped SPFx-like
-      'list.title',         // direct
-      'context.listTitle',
-      'listTitle',
-    ])
-  );
-  const idFromFC = pickNum(
-    tryPaths(fcCtxValue, [
-      'context.item.ID',
-      'item.ID',
-      'context.itemId',
-      'itemId',
-      'context.item.Id',
-      'item.Id',
-    ])
-  );
-  if (titleFromFC && idFromFC !== undefined) {
-    return { listTitle: titleFromFC, itemId: idFromFC, source: 'FormCustomizerContext' };
-  }
-
-  // 2) DynamicFormContext mirror (some apps copy values here)
-  const titleFromDyn = pickStr(
-    tryPaths(dynamicCtxValue, ['list.title', 'listTitle', 'ListTitle', 'Title'])
-  );
-  const idFromDyn = pickNum(
-    tryPaths(dynamicCtxValue, ['item.ID', 'itemId', 'ItemID', 'ID', 'Id'])
-  );
-  if (titleFromDyn && idFromDyn !== undefined) {
-    return { listTitle: titleFromDyn, itemId: idFromDyn, source: 'DynamicFormContext' };
-  }
-
-  // 3) FormData fallback (ID is often present)
-  const idFromFD = pickNum(tryPaths(formData, ['ID', 'Id']));
-  const titleFromFD = pickStr(tryPaths(formData, ['ListTitle', 'listTitle']));
-  if (titleFromFD && idFromFD !== undefined) {
-    return { listTitle: titleFromFD, itemId: idFromFD, source: 'FormData' };
-  }
-  if (idFromFD !== undefined && titleFromFC) {
-    return { listTitle: titleFromFC, itemId: idFromFD, source: 'mixed: FC.title + FormData.ID' };
-  }
-
-  return { source: 'not-found' };
+/** Read DynamicFormContext.FormData.Attachments as a boolean hint. */
+const readAttachmentsHint = (fd: Record<string, unknown> | undefined): boolean | undefined => {
+  if (!fd) return undefined;
+  const v =
+    (fd as any).Attachments ??
+    (fd as any).attachments ??
+    (fd as any).AttachmentCount ??
+    (fd as any).attachmentCount;
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v > 0;
+  return undefined;
 };
 
 /* ------------------------------ Component ------------------------------ */
@@ -237,48 +147,23 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     description = '',
     className,
     submitting,
-    debug = true,
+    context, // SPFx FormCustomizerContext
   } = props;
 
-  const log = (...args: unknown[]): void => {
-    if (!debug) return;
-    // eslint-disable-next-line no-console
-    console.log('%c[%cFileUpload%c]', 'color:#888', 'color:#0b6', 'color:#888', ...args);
-  };
-
-  const logAtt = (...args: unknown[]): void => {
-    if (!debug) return;
-    // eslint-disable-next-line no-console
-    console.log(
-      '%c[%cFileUpload%c] %cATTACHMENTS',
-      'color:#888',
-      'color:#0b6',
-      'color:#888',
-      'color:#06c;font-weight:bold',
-      ...args
-    );
-  };
-
-  log('mount: props =', { id, displayName, multiple, accept, maxFileSizeMB, maxFiles, isRequired, submitting });
-
-  // Contexts
+  // Dynamic form context (supplies modes + commit hooks)
   const raw = React.useContext(DynamicFormContext) as unknown as FormCtxShape;
-  // If your FormCustomizerContext is typed, you can add the generic instead of `unknown`
-  const fcValue = React.useContext(FormCustomizerContext as unknown as React.Context<unknown>);
-
-  log('context snapshot (DynamicFormContext):', raw);
-  log('context snapshot (FormCustomizerContext):', fcValue);
 
   const FormData = raw.FormData;
-  const FormMode = raw.FormMode;
-  const GlobalFormData = raw.GlobalFormData as (id: string, value: unknown) => void;
-  const GlobalErrorHandle = raw.GlobalErrorHandle as (id: string, error: string | undefined) => void;
+  const FormMode = raw.FormMode ?? 0;
+  const GlobalFormData = raw.GlobalFormData;
+  const GlobalErrorHandle = raw.GlobalErrorHandle;
 
+  // Modes
   const isDisplayForm = FormMode === 4; // VIEW
   const isNewMode = FormMode === 8; // NEW
-  log('modes => { FormMode, isDisplayForm, isNewMode }', { FormMode, isDisplayForm, isNewMode });
 
-  const disabledFromCtx = getCtxFlag(raw as Record<string, unknown>, [
+  // Disabled/hidden from context/passed flags
+  const disabledFromCtx = getCtxFlag(raw as unknown as Record<string, unknown>, [
     'isDisabled',
     'disabled',
     'formDisabled',
@@ -297,7 +182,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   const [files, setFiles] = React.useState<File[]>([]);
   const [error, setError] = React.useState<string>('');
 
-  // Existing SP attachments (Edit/View only, conditional)
+  // Existing SP attachments (Edit/View only when FormData says there are attachments)
   const [spAttachments, setSpAttachments] = React.useState<SPAttachment[] | undefined>(undefined);
   const [loadingSP, setLoadingSP] = React.useState<boolean>(false);
   const [loadError, setLoadError] = React.useState<string>('');
@@ -322,54 +207,35 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
     setIsDisabled(fromMode || fromCtx || fromDisabledList || fromSubmitting);
     setIsHidden(fromHiddenList);
-
-    log('recompute flags:', {
-      fromMode,
-      fromCtx,
-      fromSubmitting,
-      fromDisabledList,
-      fromHiddenList,
-      isDisabled: fromMode || fromCtx || fromDisabledList || fromSubmitting,
-      isHidden: fromHiddenList,
-    });
   }, [isDisplayForm, disabledFromCtx, AllDisabledFields, AllHiddenFields, displayName, submitting]);
 
-  // EDIT/VIEW: fetch existing AttachmentFiles using COLLECTION endpoint with $filter
+  // EDIT/VIEW: fetch existing AttachmentFiles only if FormData indicates there ARE attachments
   React.useEffect((): void | (() => void) => {
-    // 1) Mode must be Edit/View (not New)
+    // 1) Must not be NEW
     if (isNewMode) {
-      logAtt('fetch CONDITIONS:', { isNewMode, listTitle: undefined, itemId: undefined, source: '—', canFetch: false });
-      logAtt('fetch SKIPPED (conditions not met): isNewMode === true (New form)');
       return;
     }
 
-    // 2) FormData hint (just for visibility)
-    const { value: fdHasAttachments, source: fdSource } = readAttachmentsFlagLoose(FormData);
-    logAtt('FormData attachments flag (loose):', { value: fdHasAttachments, source: fdSource });
-    logAtt('FormData keys:', FormData ? Object.keys(FormData) : 'no FormData');
-
-    // 3) Need both listTitle and itemId (from EITHER context, or FormData fallback)
-    const { listTitle, itemId, source } = getListTitleAndItemIdLoose(
-      fcValue,
-      raw,
-      FormData
-    );
-
-    const canFetch = Boolean(!isNewMode && listTitle && itemId);
-    logAtt('fetch CONDITIONS:', { isNewMode, listTitle, itemId, source, canFetch });
-
-    if (!canFetch) {
-      logAtt('fetch SKIPPED (conditions not met):', {
-        reason_isNewMode: isNewMode,
-        reason_missingListTitle: !listTitle,
-        reason_missingItemId: !itemId,
-      });
+    // 2) FormData.Attachments hint must be true/positive to fetch
+    const attachmentsHint = readAttachmentsHint(FormData);
+    if (attachmentsHint === false) {
+      // Explicitly no attachments; do not fetch
+      setSpAttachments([]);
+      setLoadingSP(false);
+      setLoadError('');
       return;
     }
 
-    logAtt('fetch TRIGGERED: all conditions satisfied');
+    // 3) Need SPFx identifiers from context
+    const listTitle = context?.list?.title;
+    const itemId = context?.item?.ID;
 
-    // ✅ Matches instructions (collection + $filter + $select/$expand)
+    if (!listTitle || itemId === undefined) {
+      // Missing identifiers; cannot fetch
+      return;
+    }
+
+    // REST: collection + $filter + $select/$expand (per instructions)
     const spUrl =
       `/_api/web/lists/getbytitle('${encodeURIComponent(listTitle as string)}')/items` +
       `?$filter=Id eq ${encodeURIComponent(String(itemId))}` +
@@ -380,7 +246,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     (async (): Promise<void> => {
       setLoadingSP(true);
       setLoadError('');
-      logAtt('fetch START:', spUrl);
 
       try {
         const respUnknown: unknown = await getFetchAPI({
@@ -388,13 +253,11 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           method: 'GET',
           headers: { Accept: 'application/json;odata=nometadata' },
         });
-        logAtt('fetch RESPONSE (raw):', respUnknown);
 
-        // Collection shape: { value: [ { AttachmentFiles: [...] } ] }
+        // Expected: { value: [ { AttachmentFiles: [...] } ] }
         const rows = ((respUnknown as { value?: unknown[] } | null)?.value ?? []) as unknown[];
         const firstRow = Array.isArray(rows) ? (rows[0] as { AttachmentFiles?: unknown } | undefined) : undefined;
         const attsRaw = firstRow?.AttachmentFiles;
-        logAtt('fetch RESPONSE firstRow.AttachmentFiles (raw):', attsRaw);
 
         const atts: SPAttachment[] = Array.isArray(attsRaw)
           ? attsRaw
@@ -413,58 +276,24 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
         if (!cancelled) {
           setSpAttachments(atts);
-          if (atts.length > 0) {
-            logAtt(`fetch SUCCESS: ${atts.length} attachment(s) found`, atts);
-          } else {
-            logAtt('fetch SUCCESS: 0 attachments found');
-          }
         }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : 'Failed to load attachments.';
         if (!cancelled) {
           setSpAttachments(undefined);
           setLoadError(msg);
-          logAtt('fetch ERROR:', msg, e);
         }
       } finally {
         if (!cancelled) {
           setLoadingSP(false);
-          logAtt('fetch FINISH');
         }
       }
-    })().catch(err => {
-      logAtt('fetch PROMISE catch (should not happen due to try/catch):', err);
-    });
+    })();
 
     return (): void => {
       cancelled = true;
-      logAtt('effect cleanup: cancelled fetch');
     };
-  }, [isNewMode, raw, fcValue, FormData]);
-
-  // 🔎 Anytime attachment state changes, log a clear status message
-  React.useEffect((): void => {
-    if (loadingSP) {
-      logAtt('state change: loadingSP=true...');
-      return;
-    }
-    if (loadError) {
-      logAtt('state change: loadError ->', loadError);
-      return;
-    }
-    if (Array.isArray(spAttachments)) {
-      if (spAttachments.length > 0) {
-        logAtt(
-          `state change: ATTACHMENTS PRESENT (${spAttachments.length})`,
-          spAttachments.map(a => ({ name: a.FileName, url: a.ServerRelativeUrl }))
-        );
-      } else {
-        logAtt('state change: NO attachments (empty array)');
-      }
-    } else {
-      logAtt('state change: attachments undefined (not loaded or fetch skipped/failed)');
-    }
-  }, [spAttachments, loadingSP, loadError]);
+  }, [isNewMode, FormData, context]);
 
   /* ---------- validation & commit ---------- */
 
@@ -490,74 +319,62 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   const commitValue = React.useCallback(
     (list: File[]): void => {
       const payload = list.length === 0 ? undefined : isSingleSelection ? list[0] : list;
-      log('commitValue -> GlobalFormData:', { id, payload });
-      GlobalFormData(id, payload);
+      raw.GlobalFormData(id, payload);
     },
-    [GlobalFormData, id, isSingleSelection, log]
+    [raw, id, isSingleSelection]
   );
 
   /* ---------- handlers ---------- */
 
   const openPicker = (): void => {
-    log('openPicker click');
     if (!isDisabled) inputRef.current?.click();
-    else log('openPicker prevented: isDisabled');
   };
 
   const onFilesPicked: React.ChangeEventHandler<HTMLInputElement> = (e): void => {
     const picked = Array.from(e.currentTarget.files ?? []);
-    log('onFilesPicked:', picked.map(f => ({ name: f.name, size: f.size, type: f.type })));
 
     let next: File[] = [];
     let msg = '';
 
     if (isSingleSelection) {
-      next = picked.slice(0, 1);
-      log('single selection -> taking first file only');
+      next = picked.slice(0, 1); // single: take the first file only
     } else {
       const already = files.length;
       const capacity = isDefined(maxFiles) ? Math.max(0, maxFiles - already) : picked.length;
-      log('multi selection -> already:', already, 'capacity:', capacity);
 
       if (already === 0) {
         const toTake = isDefined(maxFiles) ? Math.min(picked.length, maxFiles) : picked.length;
         next = picked.slice(0, toTake);
-        if (isDefined(maxFiles) && picked.length > maxFiles) {
-          msg = TOO_MANY_MSG(maxFiles);
-        }
+        if (isDefined(maxFiles) && picked.length > maxFiles) msg = TOO_MANY_MSG(maxFiles);
       } else {
         const toAdd = picked.slice(0, capacity);
         next = files.concat(toAdd);
-        if (isDefined(maxFiles) && picked.length > capacity) {
-          msg = TOO_MANY_MSG(maxFiles);
-        }
+        if (isDefined(maxFiles) && picked.length > capacity) msg = TOO_MANY_MSG(maxFiles);
       }
     }
 
     if (!msg) msg = validateSelection(next);
-    log('selection after apply:', next.map(f => f.name), 'validation msg:', msg);
 
     setFiles(next);
     setError(msg);
-    GlobalErrorHandle(id, msg === '' ? undefined : msg);
+    raw.GlobalErrorHandle(id, msg === '' ? undefined : msg);
     commitValue(next);
 
-    // Allow selecting the same file(s) again
+    // Allow selecting same files again
     if (inputRef.current) inputRef.current.value = '';
   };
 
   const removeAt = React.useCallback(
     (idx: number): void => {
-      log('removeAt index:', idx);
       const next = files.filter((_, i) => i !== idx);
       const msg = validateSelection(next);
 
       setFiles(next);
       setError(msg);
-      GlobalErrorHandle(id, msg === '' ? undefined : msg);
+      raw.GlobalErrorHandle(id, msg === '' ? undefined : msg);
       commitValue(next);
     },
-    [files, validateSelection, GlobalErrorHandle, id, commitValue, log]
+    [files, validateSelection, raw, id, commitValue]
   );
 
   const handleRemove = React.useCallback(
@@ -567,23 +384,17 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   );
 
   const clearAll = (): void => {
-    log('clearAll');
     const msg = required ? REQUIRED_MSG : '';
     setFiles([]);
     setError(msg);
-    GlobalErrorHandle(id, msg || undefined);
+    raw.GlobalErrorHandle(id, msg || undefined);
     commitValue([]);
     if (inputRef.current) inputRef.current.value = '';
   };
 
   /* ---------- render ---------- */
 
-  if (isHidden) {
-    log('render: hidden');
-    return <div hidden className="fieldClass" />;
-  }
-
-  log('render: visible', { filesCount: files.length, error, isDisabled });
+  if (isHidden) return <div hidden className="fieldClass" />;
 
   return (
     <div className="fieldClass">
@@ -593,7 +404,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
         validationMessage={error || undefined}
         validationState={error ? 'error' : undefined}
       >
-        {/* Existing attachments (Edit/View only) */}
+        {/* Existing attachments (Edit/View only and only if hint allows) */}
         {!isNewMode && (
           <div style={{ marginBottom: 8 }}>
             {loadingSP && <Text size={200}>Loading attachments…</Text>}
@@ -603,55 +414,49 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
               </Text>
             )}
             {!loadingSP && !loadError && Array.isArray(spAttachments) && spAttachments.length > 0 && (
-              <>
-                {logAtt('render: showing attachments list (count=%d)', spAttachments.length)}
-                <div style={{ display: 'grid', gap: 6 }}>
-                  {spAttachments.map((a, i) => (
-                    <div
-                      key={`${a.ServerRelativeUrl}-${i}`}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        padding: '6px 10px',
-                        borderRadius: 8,
-                        border: '1px solid var(--colorNeutralStroke1)',
-                      }}
-                    >
-                      <DocumentRegular />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div
-                          style={{
-                            fontWeight: 500,
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                          }}
-                        >
-                          <Link href={a.ServerRelativeUrl} target="_blank" rel="noreferrer">
-                            {a.FileName}
-                          </Link>
-                        </div>
-                        <Text size={200}>{a.ServerRelativeUrl}</Text>
+              <div style={{ display: 'grid', gap: 6 }}>
+                {spAttachments.map((a, i) => (
+                  <div
+                    key={`${a.ServerRelativeUrl}-${i}`}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '6px 10px',
+                      borderRadius: 8,
+                      border: '1px solid var(--colorNeutralStroke1)',
+                    }}
+                  >
+                    <DocumentRegular />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div
+                        style={{
+                          fontWeight: 500,
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        <Link href={a.ServerRelativeUrl} target="_blank" rel="noreferrer">
+                          {a.FileName}
+                        </Link>
                       </div>
+                      <Text size={200}>{a.ServerRelativeUrl}</Text>
                     </div>
-                  ))}
-                </div>
-              </>
+                  </div>
+                ))}
+              </div>
             )}
             {!loadingSP && !loadError && Array.isArray(spAttachments) && spAttachments.length === 0 && (
-              <>
-                {logAtt('render: no attachments to show (empty array)')}
-                <Text size={200}>No existing attachments.</Text>
-              </>
+              <Text size={200}>No existing attachments.</Text>
             )}
           </div>
         )}
 
         {/* Hidden native input (triggered by the button) */}
         <input
-          id={id}            /* use id from props */
-          name={displayName} /* set name to displayName */
+          id={id}            /* use prop id */
+          name={displayName} /* name shows as displayName */
           ref={inputRef}
           type="file"
           multiple={!isSingleSelection}
@@ -663,7 +468,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
         {/* Actions */}
         <div className={className} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <Button appearance="primary" icon={<AttachRegular />} onClick={openPicker} disabled={isDisabled}>
+          <Button appearance="primary" icon={<AttachRegular />} onClick={(): void => openPicker()} disabled={isDisabled}>
             {files.length === 0
               ? isSingleSelection
                 ? 'Choose file'
@@ -673,8 +478,8 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
               : 'Add more files'}
           </Button>
 
-        {files.length > 0 && (
-            <Button appearance="secondary" onClick={clearAll} icon={<DismissRegular />} disabled={isDisabled}>
+          {files.length > 0 && (
+            <Button appearance="secondary" onClick={(): void => clearAll()} icon={<DismissRegular />} disabled={isDisabled}>
               Clear
             </Button>
           )}
