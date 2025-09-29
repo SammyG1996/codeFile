@@ -1,5 +1,5 @@
 /**
- * FileUploadComponent.tsx (diagnostic logging enabled)
+ * FileUploadComponent.tsx (diagnostics + resilient SP fetch)
  *
  * Example usage:
  * <FileUploadComponent
@@ -14,6 +14,19 @@
  *   submitting={isSubmitting}
  *   context={props.context} // SPFx FormCustomizerContext
  * />
+ *
+ * Behavior (summary)
+ * - NEW (FormMode===8): no SharePoint fetch (no item yet).
+ * - EDIT/VIEW: fetch existing attachments only when DynamicFormContext.FormData.Attachments is true/positive.
+ * - Selection:
+ *     · Single (maxFiles===1 or multiple=false): take first file.
+ *     · Multi: initial multi-select + “Add more files” until maxFiles.
+ *     · Validates per-file size and max file count (if provided).
+ * - Commits to GlobalFormData immediately on selection/removal:
+ *     · If empty => undefined
+ *     · Single => File
+ *     · Multi  => File[]
+ * - Renders existing attachments list (name + link) in Edit/View when present.
  */
 
 import * as React from 'react';
@@ -273,14 +286,19 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       return;
     }
 
-    // REST: collection + $filter + $select/$expand (per instructions)
-    const spUrl =
-      `/_api/web/lists/getbytitle('${encodeURIComponent(listTitle as string)}')/items` +
-      `?$filter=Id eq ${encodeURIComponent(String(itemId))}` +
-      `&$select=AttachmentFiles&$expand=AttachmentFiles`;
+    // Build robust URL variants. Some helpers prepend "/_api", some expect you to pass it.
+    const encodedTitle = encodeURIComponent(listTitle as string);
+    const idStr = encodeURIComponent(String(itemId));
 
-    // eslint-disable-next-line no-console
-    console.log(tag('FETCH start'), base, hi, base, lab, spUrl);
+    // Preferred: items(<id>) form (clean, no filter)
+    const v1_withApi = `/_api/web/lists/getbytitle('${encodedTitle}')/items(${idStr})?$select=AttachmentFiles&$expand=AttachmentFiles`;
+    const v2_withApi = `/_api/web/lists/getbytitle('${encodedTitle}')/items?$filter=Id eq ${idStr}&$select=AttachmentFiles&$expand=AttachmentFiles`;
+
+    // Fallbacks without any prefix in case getFetchAPI prepends "/_api"
+    const v1_noApi = `web/lists/getbytitle('${encodedTitle}')/items(${idStr})?$select=AttachmentFiles&$expand=AttachmentFiles`;
+    const v2_noApi = `web/lists/getbytitle('${encodedTitle}')/items?$filter=Id eq ${idStr}&$select=AttachmentFiles&$expand=AttachmentFiles`;
+
+    const candidates = [v1_withApi, v2_withApi, v1_noApi, v2_noApi];
 
     let cancelled = false;
 
@@ -288,55 +306,69 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       setLoadingSP(true);
       setLoadError('');
 
-      try {
-        const respUnknown: unknown = await getFetchAPI({
-          spUrl,
-          method: 'GET',
-          headers: { Accept: 'application/json;odata=nometadata' },
-        });
+      let lastErr: unknown = null;
+
+      for (const spUrl of candidates) {
+        if (cancelled) return;
 
         // eslint-disable-next-line no-console
-        console.log(tag('FETCH response (raw)'), base, hi, base, lab, respUnknown);
+        console.log(tag('FETCH try ->'), base, hi, base, lab, spUrl);
+        try {
+          const respUnknown: unknown = await getFetchAPI({
+            spUrl,
+            method: 'GET',
+            headers: { Accept: 'application/json;odata=nometadata' },
+          });
 
-        // Expected: { value: [ { AttachmentFiles: [...] } ] }
-        const rows = ((respUnknown as { value?: unknown[] } | null)?.value ?? []) as unknown[];
-        const firstRow = Array.isArray(rows) ? (rows[0] as { AttachmentFiles?: unknown } | undefined) : undefined;
-        const attsRaw = firstRow?.AttachmentFiles;
+          // eslint-disable-next-line no-console
+          console.log(tag('FETCH response (raw)'), base, hi, base, lab, { spUrl, respUnknown });
 
-        const atts: SPAttachment[] = Array.isArray(attsRaw)
-          ? attsRaw
-              .map((x): SPAttachment | undefined => {
+          // Expected: either single item { AttachmentFiles: [...] } or collection { value: [ { AttachmentFiles: [...] } ] }
+          let attsRaw: unknown;
+
+          if (respUnknown && typeof respUnknown === 'object') {
+            const r = respUnknown as Record<string, unknown>;
+            if (Array.isArray(r.value)) {
+              const first = r.value[0] as Record<string, unknown> | undefined;
+              attsRaw = first?.AttachmentFiles;
+            } else if (r.AttachmentFiles !== undefined) {
+              attsRaw = r.AttachmentFiles;
+            }
+          }
+
+          const atts: SPAttachment[] = Array.isArray(attsRaw)
+            ? (attsRaw as unknown[]).map((x) => {
                 if (x && typeof x === 'object') {
                   const o = x as Record<string, unknown>;
                   const FileName = typeof o.FileName === 'string' ? o.FileName : undefined;
-                  const ServerRelativeUrl =
-                    typeof o.ServerRelativeUrl === 'string' ? o.ServerRelativeUrl : undefined;
+                  const ServerRelativeUrl = typeof o.ServerRelativeUrl === 'string' ? o.ServerRelativeUrl : undefined;
                   if (FileName && ServerRelativeUrl) return { FileName, ServerRelativeUrl };
                 }
                 return undefined;
-              })
-              .filter((x): x is SPAttachment => x !== undefined)
-          : [];
+              }).filter((x): x is SPAttachment => !!x)
+            : [];
 
-        if (!cancelled) {
           setSpAttachments(atts);
           // eslint-disable-next-line no-console
           console.log(tag('FETCH success'), base, hi, base, lab, `${atts.length} attachment(s)`, atts);
-        }
-      } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : 'Failed to load attachments.';
-        if (!cancelled) {
-          setSpAttachments(undefined);
-          setLoadError(msg);
-          // eslint-disable-next-line no-console
-          console.log(tag('FETCH error'), base, hi, base, lab, msg, e);
-        }
-      } finally {
-        if (!cancelled) {
           setLoadingSP(false);
+          return; // ✅ stop at first success
+        } catch (e) {
+          lastErr = e;
           // eslint-disable-next-line no-console
-          console.log(tag('FETCH done'), base, hi, base, lab);
+          console.log(tag('FETCH failed'), base, hi, base, lab, { spUrl, error: e });
+          // try next candidate…
         }
+      }
+
+      // If all candidates failed:
+      if (!cancelled) {
+        const msg = lastErr instanceof Error ? lastErr.message : 'Failed to load attachments.';
+        setSpAttachments(undefined);
+        setLoadError(msg);
+        setLoadingSP(false);
+        // eslint-disable-next-line no-console
+        console.log(tag('FETCH error – all variants failed'), base, hi, base, lab, msg);
       }
     })();
 
