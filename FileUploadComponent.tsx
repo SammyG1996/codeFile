@@ -1,5 +1,5 @@
 /**
- * FileUploadComponent.tsx
+ * FileUploadComponent.tsx (diagnostic logging enabled)
  *
  * Example usage:
  * <FileUploadComponent
@@ -14,19 +14,6 @@
  *   submitting={isSubmitting}
  *   context={props.context} // SPFx FormCustomizerContext
  * />
- *
- * Behavior (summary)
- * - NEW (FormMode===8): no SharePoint fetch (no item yet).
- * - EDIT/VIEW: fetch existing attachments only when DynamicFormContext.FormData.Attachments === true.
- * - Selection:
- *     · Single (maxFiles===1 or multiple=false): take first file.
- *     · Multi: initial multi-select + “Add more files” until maxFiles.
- *     · Validates per-file size and max file count (if provided).
- * - Commits to GlobalFormData immediately on selection/removal:
- *     · If empty => undefined
- *     · Single => File
- *     · Multi  => File[]
- * - Renders existing attachments list (name + link) in Edit/View when present.
  */
 
 import * as React from 'react';
@@ -49,6 +36,7 @@ export interface FileUploadProps {
   description?: string;
   className?: string;
   submitting?: boolean;
+
   /** SPFx Form Customizer context – used to build the REST URL */
   context?: FormCustomizerContext;
 }
@@ -133,6 +121,13 @@ const readAttachmentsHint = (fd: Record<string, unknown> | undefined): boolean |
   return undefined;
 };
 
+/* Pretty, scoped logger */
+const tag = (label: string): string =>
+  `%c[%cFileUpload%c] %c${label}`;
+const base = 'color:#888';
+const hi   = 'color:#0b6';
+const lab  = 'color:#06c;font-weight:bold';
+
 /* ------------------------------ Component ------------------------------ */
 
 export default function FileUploadComponent(props: FileUploadProps): JSX.Element {
@@ -190,6 +185,24 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   // Single vs multi selection
   const isSingleSelection = !multiple || maxFiles === 1;
 
+  /* ---------- initial diagnostics ---------- */
+
+  React.useEffect(() => {
+    // Show high-level context once on mount
+    // eslint-disable-next-line no-console
+    console.log(tag('MOUNT'), base, hi, base, lab, {
+      props: { id, displayName, multiple, accept, maxFileSizeMB, maxFiles, isRequired, submitting },
+      formMode: FormMode,
+      formDataKeys: FormData ? Object.keys(FormData) : '(no FormData)',
+      contextSummary: {
+        hasContext: Boolean(context),
+        listTitle: context?.list?.title,
+        itemId: context?.item?.ID,
+      },
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   /* ---------- effects ---------- */
 
   React.useEffect((): void => {
@@ -205,19 +218,38 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
     setIsDisabled(fromMode || fromCtx || fromDisabledList || fromSubmitting);
     setIsHidden(fromHiddenList);
+
+    // eslint-disable-next-line no-console
+    console.log(tag('FLAGS recompute'), base, hi, base, lab, {
+      fromMode,
+      fromCtx,
+      fromSubmitting,
+      fromDisabledList,
+      fromHiddenList,
+      computed: {
+        isDisabled: fromMode || fromCtx || fromDisabledList || fromSubmitting,
+        isHidden: fromHiddenList,
+      },
+    });
   }, [isDisplayForm, disabledFromCtx, AllDisabledFields, AllHiddenFields, displayName, submitting]);
 
   // EDIT/VIEW: fetch existing AttachmentFiles only if FormData indicates there ARE attachments
   React.useEffect((): void | (() => void) => {
     // 1) Must not be NEW
     if (isNewMode) {
+      // eslint-disable-next-line no-console
+      console.log(tag('FETCH skip'), base, hi, base, lab, 'New form (FormMode === 8)');
       return;
     }
 
     // 2) FormData.Attachments hint must be true/positive to fetch
     const attachmentsHint = readAttachmentsHint(FormData);
+    // eslint-disable-next-line no-console
+    console.log(tag('FormData.Attachments'), base, hi, base, lab, attachmentsHint, { FormData });
+
     if (attachmentsHint === false) {
-      // Explicitly no attachments; do not fetch
+      // eslint-disable-next-line no-console
+      console.log(tag('FETCH skip'), base, hi, base, lab, 'FormData indicates no attachments');
       setSpAttachments([]);
       setLoadingSP(false);
       setLoadError('');
@@ -228,8 +260,16 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     const listTitle = context?.list?.title;
     const itemId = context?.item?.ID;
 
+    // eslint-disable-next-line no-console
+    console.log(tag('FETCH conditions'), base, hi, base, lab, {
+      listTitle,
+      itemId,
+      canFetch: Boolean(listTitle && itemId !== undefined),
+    });
+
     if (!listTitle || itemId === undefined) {
-      // Missing identifiers; cannot fetch
+      // eslint-disable-next-line no-console
+      console.log(tag('FETCH skip'), base, hi, base, lab, 'Missing listTitle or itemId from context');
       return;
     }
 
@@ -238,6 +278,9 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       `/_api/web/lists/getbytitle('${encodeURIComponent(listTitle as string)}')/items` +
       `?$filter=Id eq ${encodeURIComponent(String(itemId))}` +
       `&$select=AttachmentFiles&$expand=AttachmentFiles`;
+
+    // eslint-disable-next-line no-console
+    console.log(tag('FETCH start'), base, hi, base, lab, spUrl);
 
     let cancelled = false;
 
@@ -251,6 +294,9 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           method: 'GET',
           headers: { Accept: 'application/json;odata=nometadata' },
         });
+
+        // eslint-disable-next-line no-console
+        console.log(tag('FETCH response (raw)'), base, hi, base, lab, respUnknown);
 
         // Expected: { value: [ { AttachmentFiles: [...] } ] }
         const rows = ((respUnknown as { value?: unknown[] } | null)?.value ?? []) as unknown[];
@@ -274,22 +320,30 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
         if (!cancelled) {
           setSpAttachments(atts);
+          // eslint-disable-next-line no-console
+          console.log(tag('FETCH success'), base, hi, base, lab, `${atts.length} attachment(s)`, atts);
         }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : 'Failed to load attachments.';
         if (!cancelled) {
           setSpAttachments(undefined);
           setLoadError(msg);
+          // eslint-disable-next-line no-console
+          console.log(tag('FETCH error'), base, hi, base, lab, msg, e);
         }
       } finally {
         if (!cancelled) {
           setLoadingSP(false);
+          // eslint-disable-next-line no-console
+          console.log(tag('FETCH done'), base, hi, base, lab);
         }
       }
     })();
 
     return (): void => {
       cancelled = true;
+      // eslint-disable-next-line no-console
+      console.log(tag('EFFECT cleanup'), base, hi, base, lab, 'cancelled=true');
     };
   }, [isNewMode, FormData, context]);
 
@@ -317,6 +371,8 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   const commitValue = React.useCallback(
     (list: File[]): void => {
       const payload = list.length === 0 ? undefined : isSingleSelection ? list[0] : list;
+      // eslint-disable-next-line no-console
+      console.log(tag('COMMIT GlobalFormData'), base, hi, base, lab, { id, payload });
       raw.GlobalFormData(id, payload);
     },
     [raw, id, isSingleSelection]
@@ -330,6 +386,8 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
   const onFilesPicked: React.ChangeEventHandler<HTMLInputElement> = (e): void => {
     const picked = Array.from(e.currentTarget.files ?? []);
+    // eslint-disable-next-line no-console
+    console.log(tag('PICKED input files'), base, hi, base, lab, picked.map(f => ({ name: f.name, size: f.size, type: f.type })));
 
     let next: File[] = [];
     let msg = '';
@@ -358,6 +416,13 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     raw.GlobalErrorHandle(id, msg === '' ? undefined : msg);
     commitValue(next);
 
+    // eslint-disable-next-line no-console
+    console.log(tag('STATE files set'), base, hi, base, lab, {
+      count: next.length,
+      names: next.map(f => f.name),
+      error: msg || '(none)',
+    });
+
     // Allow selecting same files again
     if (inputRef.current) inputRef.current.value = '';
   };
@@ -371,6 +436,9 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       setError(msg);
       raw.GlobalErrorHandle(id, msg === '' ? undefined : msg);
       commitValue(next);
+
+      // eslint-disable-next-line no-console
+      console.log(tag('REMOVE file'), base, hi, base, lab, { removedIndex: idx, remaining: next.map(f => f.name), error: msg || '(none)' });
     },
     [files, validateSelection, raw, id, commitValue]
   );
@@ -387,6 +455,10 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     setError(msg);
     raw.GlobalErrorHandle(id, msg || undefined);
     commitValue([]);
+
+    // eslint-disable-next-line no-console
+    console.log(tag('CLEAR all files'), base, hi, base, lab, { error: msg || '(none)' });
+
     if (inputRef.current) inputRef.current.value = '';
   };
 
