@@ -1,5 +1,5 @@
 /**
- * FileUploadComponent.tsx (clean build: no console logs, no `any`, no floating promises)
+ * FileUploadComponent.tsx (clean build: no console logs, no `any`, no floating promises, no `void` op, dot-notation)
  *
  * Example:
  * <FileUploadComponent
@@ -240,7 +240,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
     let cancelled = false;
 
-    void (async (): Promise<void> => {
+    (async (): Promise<void> => {
       setLoadingSP(true);
       setLoadError('');
 
@@ -264,7 +264,8 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
               const first = r.value[0] as Record<string, unknown> | undefined;
               attsRaw = first?.AttachmentFiles;
             } else if (Object.prototype.hasOwnProperty.call(r, 'AttachmentFiles')) {
-              attsRaw = (r as Record<string, unknown>)['AttachmentFiles'];
+              // dot-notation-friendly cast
+              attsRaw = (r as { AttachmentFiles?: unknown }).AttachmentFiles;
             }
           }
 
@@ -296,7 +297,9 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
         setLoadError(msg);
         setLoadingSP(false);
       }
-    })();
+    })().catch(() => {
+      // Suppress unhandled rejection to satisfy eslint rules without using `void` operator.
+    });
 
     return (): void => {
       cancelled = true;
