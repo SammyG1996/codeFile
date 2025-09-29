@@ -16,11 +16,11 @@
  * />
  *
  * Behavior (summary)
- * - In NEW mode (FormMode===8): no SharePoint fetch for existing attachments (no item yet).
- * - In EDIT/VIEW: we only fetch existing attachments when DynamicFormContext.FormData.Attachments === true.
+ * - NEW (FormMode===8): no SharePoint fetch (no item yet).
+ * - EDIT/VIEW: fetch existing attachments only when DynamicFormContext.FormData.Attachments === true.
  * - Selection:
- *     · Single mode (maxFiles===1 or multiple=false): take first file.
- *     · Multi mode: allow initial multi-select + “Add more files” until maxFiles.
+ *     · Single (maxFiles===1 or multiple=false): take first file.
+ *     · Multi: initial multi-select + “Add more files” until maxFiles.
  *     · Validates per-file size and max file count (if provided).
  * - Commits to GlobalFormData immediately on selection/removal:
  *     · If empty => undefined
@@ -120,7 +120,7 @@ const formatBytes = (bytes: number): string => {
   return `${Number.isInteger(n) ? n.toFixed(0) : n.toFixed(2)} ${units[i]}`;
 };
 
-/** Read DynamicFormContext.FormData.Attachments as a boolean hint. */
+/** Interpret DynamicFormContext.FormData.Attachments as a boolean hint. */
 const readAttachmentsHint = (fd: Record<string, unknown> | undefined): boolean | undefined => {
   if (!fd) return undefined;
   const v =
@@ -155,8 +155,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
   const FormData = raw.FormData;
   const FormMode = raw.FormMode ?? 0;
-  const GlobalFormData = raw.GlobalFormData;
-  const GlobalErrorHandle = raw.GlobalErrorHandle;
 
   // Modes
   const isDisplayForm = FormMode === 4; // VIEW
