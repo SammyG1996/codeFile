@@ -134,7 +134,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const GlobalFormData = getKey<(id: string, value: unknown) => void>(ctx, 'GlobalFormData');
   const GlobalErrorHandle = getKey<(id: string, error: string | null) => void>(ctx, 'GlobalErrorHandle');
 
-  // Optional GlobalRefs from context (boss can capture DOM refs)
+  // Optional GlobalRefs to expose the DOM element
   const GlobalRefs = hasKey(ctx, 'GlobalRefs')
     ? (getKey<(el: HTMLElement | undefined) => void>(ctx, 'GlobalRefs'))
     : undefined;
@@ -147,18 +147,26 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const AllDisabledFields = hasKey(ctx, 'AllDisabledFields') ? ctx.AllDisabledFields : undefined;
   const AllHiddenFields = hasKey(ctx, 'AllHiddenFields') ? ctx.AllHiddenFields : undefined;
 
+  // Derive disabled/hidden every render (persists after submit)
+  const baseDisabled = isDisplayForm || disabledFromCtx || isListed(AllDisabledFields, displayName);
+  const isDisabled = baseDisabled || !!submitting;
+  const isHidden = isListed(AllHiddenFields, displayName);
+
+  // Required flag still controlled (it can change)
   const [isRequired, setIsRequired] = React.useState<boolean>(!!requiredProp);
-  const [isDisabled, setIsDisabled] = React.useState<boolean>(
-    isDisplayForm || disabledFromCtx || !!submitting || isListed(AllDisabledFields, displayName)
-  );
-  const [isHidden, setIsHidden] = React.useState<boolean>(isListed(AllHiddenFields, displayName));
 
   const [localVal, setLocalVal] = React.useState<string>('');
   const [error, setError] = React.useState<string>('');
   const [touched, setTouched] = React.useState<boolean>(false);
 
-  // local ref to the actual <input> element
+  // local ref to the actual <input> element and forward to context
   const elemRef = React.useRef<HTMLInputElement>(null);
+  React.useEffect(() => {
+    if (GlobalRefs) GlobalRefs(elemRef.current ?? undefined);
+    return () => {
+      if (GlobalRefs) GlobalRefs(undefined);
+    };
+  }, [GlobalRefs]);
 
   /* ---------- number helpers ---------- */
 
@@ -181,7 +189,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       out = (neg ? '-' : '') + out.slice(neg ? 1 : 0).replace(/-/g, '');
     }
     const i = out.indexOf('.');
-    if (i !== -1) out = out.slice(0, i + 1) + out.slice(i + 1).replace(/\./g, '');
+       if (i !== -1) out = out.slice(0, i + 1) + out.slice(i + 1).replace(/\./g, '');
     return out;
   }, [allowNegative]);
 
@@ -198,9 +206,11 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       const dot = val.indexOf('.');
       if (dot === -1) return { value: val, trimmed: false };
       const whole = val.slice(0, dot + 1);
-      const frac = val.slice(dot + 1);
-      if (frac.length <= decimalLimit) return { value: val, trimmed: false };
-      return { value: whole + frac.slice(0, decimalLimit), trimmed: true };
+      const frac = val.slice(0, dot + 1) ? val.slice(dot + 1) : '';
+      const within = frac.length <= decimalLimit;
+      return within
+        ? { value: val, trimmed: false }
+        : { value: whole + frac.slice(0, decimalLimit), trimmed: true };
     },
     [decimalLimit]
   );
@@ -264,17 +274,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     setIsRequired(!!requiredProp);
   }, [requiredProp]);
 
-  React.useEffect((): void => {
-    const fromMode = isDisplayForm;
-    const fromCtx = disabledFromCtx;
-    const fromSubmitting = !!submitting;
-    const fromDisabledList = isListed(AllDisabledFields, displayName);
-    const fromHiddenList = isListed(AllHiddenFields, displayName);
-
-    setIsDisabled(fromMode || fromCtx || fromDisabledList || fromSubmitting);
-    setIsHidden(fromHiddenList);
-  }, [isDisplayForm, disabledFromCtx, AllDisabledFields, AllHiddenFields, displayName, submitting]);
-
+  // Prefill once on mount (New vs Edit). No global commits here.
   React.useEffect((): void => {
     if (FormMode === 8) {
       const initial = starterValue !== undefined ? valueToString(starterValue) : '';
@@ -296,15 +296,8 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       setTouched(false);
       pushErrorIfTouched(trimmed && decimalLimit !== undefined ? decimalLimitMsg(decimalLimit) : '');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // initialize once
-
-  // Pass the ref to GlobalRefs (if provided in context)
-  React.useEffect(() => {
-    if (GlobalRefs) GlobalRefs(elemRef.current ?? undefined);
-    return () => {
-      if (GlobalRefs) GlobalRefs(undefined);
-    };
-  }, [GlobalRefs]);
 
   /* ---------- handlers ---------- */
 
@@ -442,17 +435,14 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
           onBlur={handleBlur}
           onPaste={isNumber ? handleNumberPaste : handleTextPaste}
           disabled={isDisabled}
-
           /* TEXT ONLY */
           maxLength={!isNumber && isDefined(maxLength) ? maxLength : undefined}
-
           /* NUMBER ONLY */
           type={isNumber ? 'number' : 'text'}     // file mode renders as text (display-only filename)
           inputMode={isNumber ? 'decimal' : undefined}
           step="any"
           min={isNumber && isDefined(min) ? min : undefined}
           max={isNumber && isDefined(max) ? max : undefined}
-
           contentAfter={after}
         />
         {description !== '' && <div className="descriptionText">{description}</div>}
