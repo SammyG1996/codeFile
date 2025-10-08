@@ -1,76 +1,48 @@
 /**
  * FileUploadComponent.tsx
  * ---------------------------------------------------------------------
- * Purpose
- *  - A reusable file upload field that works inside your DynamicForm/SPFx
- *    Form Customizer solution.
- *  - Supports single or multiple file selection, basic client-side
- *    validation (required, max files, max size), and shows existing
- *    SharePoint attachments when editing/viewing a list item.
- *
- * How to use
- * ---------------------------------------------------------------------
- * <FileUploadComponent
- *   id="Attachments"               // the key used when writing to GlobalFormData
- *   displayName="Attachments"      // label shown in the UI
- *   multiple                       // allow selecting more than one file
- *   accept=".pdf,.doc,.docx,image/*"
- *   maxFiles={5}                   // maximum number of files user can pick
- *   maxFileSizeMB={15}             // per-file size limit in MB
- *   isRequired={false}             // validate that at least one file is selected
- *   description="Add any supporting files."
- *   submitting={isSubmitting}      // disable while the form is saving
- *   context={props.context}        // SPFx FormCustomizerContext for REST URLs
- * />
- *
- * Notes
- * ---------------------------------------------------------------------
- * - This component only SELECTS files and validates them. Actual upload to
- *   SharePoint is expected to happen in your form's submit handler where
- *   you read GlobalFormData(id) and post files as you need.
- * - When in Edit/View mode, if FormData.Attachments indicates the item has
- *   attachments, we call the SharePoint REST API to list them and display
- *   links (read-only).
+ * - NEW: Deleting an existing attachment now prompts for confirmation
+ *   and then calls the SharePoint REST API. On success the file row
+ *   disappears locally.
+ * - Existing behavior:
+ *   • New files are selected locally (no upload here) and committed into
+ *     GlobalFormData(id) as File | File[].
+ *   • Existing SP attachments are listed in Edit/View and show filename
+ *     only (no path). Each row has a Delete button.
+ *   • accept is optional; if you omit it, any file type is allowed.
+ *   • GlobalErrorHandle gets `null` for “no error”.
  */
 
 import * as React from 'react';
-import { Field, Button, Text, Link } from '@fluentui/react-components';
+import { Field, Button, Text, Link, Spinner } from '@fluentui/react-components';
 import { DismissRegular, DocumentRegular, AttachRegular } from '@fluentui/react-icons';
 
-// Form-level context (your existing provider) used to commit field values/errors
 import { DynamicFormContext } from './DynamicFormContext';
-
-// SPFx Form Customizer context gives us list title/GUID, item ID, and web URL
 import type { FormCustomizerContext } from '@microsoft/sp-listview-extensibility';
-
-// Project helper for making SharePoint REST requests
 import { getFetchAPI } from '../Utilis/getFetchApi';
 
 /* ============================= Types ============================= */
 
-// Props accepted by the component
 export interface FileUploadProps {
-  id: string;                      // field key used when writing to GlobalFormData
-  displayName: string;             // visible label
-  multiple?: boolean;              // allow selecting multiple files
-  accept?: string;                 // accept attribute (e.g. ".pdf,image/*")
+  id: string;                      // key used when writing to GlobalFormData
+  displayName: string;             // label shown in the UI
+  multiple?: boolean;              // allow multiple selection
+  accept?: string;                 // OPTIONAL, omit to allow any type
   maxFileSizeMB?: number;          // per-file size limit (MB)
-  maxFiles?: number;               // overall limit for file count (only for multi-select)
+  maxFiles?: number;               // overall count limit (multi only)
   isRequired?: boolean;            // require at least one file
-  description?: string;            // helper text below the field
-  className?: string;              // extra CSS class for action row
-  submitting?: boolean;            // disable interactions while submitting
-  context?: FormCustomizerContext; // SPFx context (build absolute REST URLs)
+  description?: string;            // helper text
+  className?: string;              // extra CSS for action row
+  submitting?: boolean;            // disable while form is saving
+  context?: FormCustomizerContext; // SPFx context for REST URLs
 }
 
-// Subset of your DynamicFormContext shape we rely on
 type FormCtxShape = {
-  FormData?: Record<string, unknown>;               // current item data (Edit/View) or defaults (New)
-  FormMode?: number;                                // 8=new, 6=edit, 4=view per your solution
-  GlobalFormData: (id: string, value: unknown) => void;          // commit value to form
-  GlobalErrorHandle: (id: string, error: string | undefined) => void; // commit error to form
+  FormData?: Record<string, unknown>;
+  FormMode?: number;
+  GlobalFormData: (id: string, value: unknown) => void;
+  GlobalErrorHandle: (id: string, error: string | null) => void;
 
-  // optional flags/lists handled by your provider
   isDisabled?: boolean;
   disabled?: boolean;
   formDisabled?: boolean;
@@ -79,26 +51,21 @@ type FormCtxShape = {
   AllHiddenFields?: unknown;
 };
 
-// Minimal shape for an attachment returned by REST
 type SPAttachment = { FileName: string; ServerRelativeUrl: string };
 
 /* =========================== Utilities =========================== */
 
-// User messages for validation
 const REQUIRED_MSG = 'Please select a file.';
 const TOO_LARGE_MSG = (name: string, limitMB: number): string =>
   `“${name}” exceeds the maximum size of ${limitMB} MB.`;
 const TOO_MANY_MSG = (limit: number): string =>
   `You can attach up to ${limit} file${limit === 1 ? '' : 's'}.`;
 
-// Small helpers
 const isDefined = <T,>(v: T | undefined): v is T => v !== undefined;
 
-// Read a boolean-ish flag from a bag of possible keys on an unknown object
 const getCtxFlag = (o: Record<string, unknown>, keys: string[]): boolean =>
   keys.some(k => Object.prototype.hasOwnProperty.call(o, k) && Boolean(o[k]));
 
-// Check if a display name is present in a list-like "disabled/hidden fields" structure
 const isListed = (bag: unknown, name: string): boolean => {
   const needle = name.trim().toLowerCase();
   if (bag === null || bag === undefined) return false;
@@ -120,20 +87,15 @@ const isListed = (bag: unknown, name: string): boolean => {
   return false;
 };
 
-// Format file sizes nicely for the list
 const formatBytes = (bytes: number): string => {
   if (!Number.isFinite(bytes)) return '';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   let i = 0;
   let n = bytes;
-  while (n >= 1024 && i < units.length - 1) {
-    n /= 1024;
-    i++;
-  }
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
   return `${Number.isInteger(n) ? n.toFixed(0) : n.toFixed(2)} ${units[i]}`;
 };
 
-// Look at FormData and interpret different possible keys that mean "has attachments"
 const readAttachmentsHint = (fd: Record<string, unknown> | undefined): boolean | undefined => {
   if (!fd) return undefined;
   const tryKeys = ['Attachments', 'attachments', 'AttachmentCount', 'attachmentCount'] as const;
@@ -154,65 +116,58 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     id,
     displayName,
     multiple = false,
-    accept,
+    accept,                      // optional → any file type if omitted
     maxFileSizeMB,
     maxFiles,
     isRequired,
     description = '',
     className,
     submitting,
-    context, // SPFx FormCustomizerContext
+    context,
   } = props;
 
-  // Pull the form-level services + data (commit hooks, mode, optional flags)
+  // Pull the form services from your provider
   const raw = React.useContext(DynamicFormContext) as unknown as FormCtxShape;
 
-  // Basic mode and existing data
+  // Mode + form data
   const FormData = raw.FormData;
   const FormMode = raw.FormMode ?? 0;
-  const isDisplayForm = FormMode === 4; // VIEW mode
-  const isNewMode = FormMode === 8;     // NEW mode
+  const isDisplayForm = FormMode === 4; // VIEW
+  const isNewMode = FormMode === 8;     // NEW
 
-  // Merge multiple sources that can disable/hide this field (your provider's design)
+  // Disable/Hide calculations
   const disabledFromCtx = getCtxFlag(raw as unknown as Record<string, unknown>, [
     'isDisabled', 'disabled', 'formDisabled', 'Disabled',
   ]);
   const AllDisabledFields = raw.AllDisabledFields;
   const AllHiddenFields = raw.AllHiddenFields;
 
-  // ========================= Local UI State =========================
-  // Whether field is required (prop can change)
+  // ------------------------ Local state ------------------------
   const [required, setRequired] = React.useState<boolean>(Boolean(isRequired));
-
-  // Disable or hide based on mode, provider flags/lists, and submitting
   const [isDisabled, setIsDisabled] = React.useState<boolean>(
     isDisplayForm || disabledFromCtx || Boolean(submitting) || isListed(AllDisabledFields, displayName)
   );
   const [isHidden, setIsHidden] = React.useState<boolean>(isListed(AllHiddenFields, displayName));
 
-  // Files the user picked in this session (not yet uploaded)
+  // Files newly selected (not uploaded yet)
   const [files, setFiles] = React.useState<File[]>([]);
-  const [error, setError] = React.useState<string>(''); // local validation error message
+  const [error, setError] = React.useState<string>('');
 
-  // Read-only list of existing SP attachments for this item (Edit/View)
+  // Existing SP attachments + loading state + errors
   const [spAttachments, setSpAttachments] = React.useState<SPAttachment[] | undefined>(undefined);
   const [loadingSP, setLoadingSP] = React.useState<boolean>(false);
   const [loadError, setLoadError] = React.useState<string>('');
+  const [deletingName, setDeletingName] = React.useState<string | null>(null);
 
-  // Hidden input reference so we can trigger the OS picker with a button
   const inputRef = React.useRef<HTMLInputElement>(null);
-
-  // If multiple=false OR maxFiles===1, we behave as a single-file input
   const isSingleSelection = !multiple || maxFiles === 1;
 
-  /* ------------------------- Effects: props -> state ------------------------- */
+  /* ------------------------- props -> state ------------------------- */
 
-  // If the `isRequired` prop changes, update state
   React.useEffect((): void => {
     setRequired(Boolean(isRequired));
   }, [isRequired]);
 
-  // Recompute disabled/hidden when environment changes
   React.useEffect((): void => {
     const fromMode = isDisplayForm;
     const fromCtx = disabledFromCtx;
@@ -224,31 +179,20 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     setIsHidden(fromHiddenList);
   }, [isDisplayForm, disabledFromCtx, AllDisabledFields, AllHiddenFields, displayName, submitting]);
 
-  /* ----------------- Effects: fetch existing attachments ----------------- */
-  /**
-   * In Edit/View:
-   *   If FormData indicates there are attachments on the item,
-   *   we call the SharePoint REST API to retrieve AttachmentFiles and display them.
-   *
-   * We build absolute URLs using:
-   *   - context.pageContext.web.absoluteUrl
-   *   - context.list.id (GUID) OR context.list.title
-   *   - context.item.ID
-   */
-  React.useEffect((): void | (() => void) => {
-    // New mode has no existing attachments
-    if (isNewMode) return;
+  /* ----------- fetch existing attachments (Edit/View only) ----------- */
 
-    // Only fetch if the item is expected to have attachments
+  React.useEffect((): void | (() => void) => {
+    if (isNewMode) return; // no attachments yet in NEW
+
     const attachmentsHint = readAttachmentsHint(FormData);
     if (attachmentsHint === false) {
-      setSpAttachments([]); // explicitly show "No existing attachments"
+      setSpAttachments([]);
       setLoadingSP(false);
       setLoadError('');
       return;
     }
 
-    // Safe optional chaining to read parts of the SPFx context
+    // Build absolute URLs from SPFx context
     const listTitle: string | undefined = (context as { list?: { title?: string } } | undefined)?.list?.title;
     const listGuid: string | undefined = (context as { list?: { id?: string } } | undefined)?.list?.id;
     const itemId: number | undefined = (context as { item?: { ID?: number } } | undefined)?.item?.ID;
@@ -256,19 +200,12 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       (context as { pageContext?: { web?: { absoluteUrl?: string } } } | undefined)?.pageContext?.web?.absoluteUrl ??
       (typeof window !== 'undefined' ? window.location.origin : undefined);
 
-    // Need a base URL, the item ID, and either a GUID or a Title to address the list
-    if (!baseUrl || !itemId || (!listGuid && !listTitle)) {
-      return;
-    }
+    if (!baseUrl || !itemId || (!listGuid && !listTitle)) return;
 
-    // Encode title/ID for the URL paths
     const encTitle = listTitle ? encodeURIComponent(listTitle) : '';
     const idStr = encodeURIComponent(String(itemId));
 
-    // We try a few URL shapes to be robust to helper implementations:
-    //  - with "/_api" and without (some helpers prepend it)
-    //  - addressing by GUID (preferred) or by Title
-    //  - using items(<Id>) and the $filter=Id eq <Id> form
+    // Try multiple shapes (some helpers auto-prepend /_api)
     const urls: string[] = [];
     if (listGuid) {
       urls.push(
@@ -289,7 +226,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
     let cancelled = false;
 
-    // Async IIFE to run the fetch; we `.catch()` to satisfy ESLint (no-floating-promises)
     (async (): Promise<void> => {
       setLoadingSP(true);
       setLoadError('');
@@ -297,20 +233,16 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       let success = false;
       let lastErr: unknown = null;
 
-      // Try each candidate URL until one works
       for (const spUrl of urls) {
         if (cancelled) return;
-
         try {
-          // Your project helper; expects an absolute URL string
           const respUnknown: unknown = await getFetchAPI({
             spUrl,
             method: 'GET',
             headers: { Accept: 'application/json;odata=nometadata' },
           });
 
-          // Response can be a single item or a collection with "value"
-          // We normalize both shapes to a plain "attachments" array.
+          // Normalise either “{ value: [{ AttachmentFiles: [...] }] }” or “{ AttachmentFiles: [...] }”
           let attsRaw: unknown;
           if (respUnknown && typeof respUnknown === 'object') {
             const r = respUnknown as Record<string, unknown>;
@@ -322,7 +254,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
             }
           }
 
-          // Map unknown objects into our SPAttachment type (skip anything malformed)
           const atts: SPAttachment[] = Array.isArray(attsRaw)
             ? (attsRaw as unknown[]).map((x): SPAttachment | undefined => {
                 if (x && typeof x === 'object') {
@@ -338,32 +269,25 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           setSpAttachments(atts);
           setLoadingSP(false);
           success = true;
-          break; // stop after first success
+          break;
         } catch (e: unknown) {
-          lastErr = e; // remember error but keep trying next URL
+          lastErr = e;
         }
       }
 
-      // If none of the candidates worked, surface the error
       if (!success && !cancelled) {
         const msg = lastErr instanceof Error ? lastErr.message : 'Failed to load attachments.';
         setSpAttachments(undefined);
         setLoadError(msg);
         setLoadingSP(false);
       }
-    })().catch(() => {
-      // Swallowing to satisfy lints; errors handled in the code above.
-    });
+    })().catch(() => { /* satisfy lint */ });
 
-    // Cleanup if the component unmounts before the fetch completes
-    return (): void => {
-      cancelled = true;
-    };
+    return (): void => { cancelled = true; };
   }, [isNewMode, FormData, context]);
 
-  /* ------------------------- Validation & commit ------------------------- */
+  /* ----------------- Validation & committing new files ----------------- */
 
-  // Validate picked files against required/maxFiles/maxFileSizeMB
   const validateSelection = React.useCallback(
     (list: File[]): string => {
       if (required && list.length === 0) return REQUIRED_MSG;
@@ -374,18 +298,14 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
       if (isDefined(maxFileSizeMB)) {
         const perFileLimitBytes = maxFileSizeMB * 1024 * 1024;
-        for (const f of list) {
-          if (f.size > perFileLimitBytes) return TOO_LARGE_MSG(f.name, maxFileSizeMB);
-        }
+        for (const f of list) if (f.size > perFileLimitBytes) return TOO_LARGE_MSG(f.name, maxFileSizeMB);
       }
       return '';
     },
     [required, isSingleSelection, maxFiles, maxFileSizeMB]
   );
 
-  // Push the selected files into your form's GlobalFormData store.
-  // For single mode we send the single File object; for multi we send the array.
-  const commitValue = React.useCallback(
+  const commitNewFiles = React.useCallback(
     (list: File[]): void => {
       const payload: unknown = list.length === 0 ? undefined : isSingleSelection ? list[0] : list;
       raw.GlobalFormData(id, payload);
@@ -393,14 +313,12 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     [raw, id, isSingleSelection]
   );
 
-  /* ----------------------------- Event handlers ----------------------------- */
+  /* ----------------------------- Handlers ----------------------------- */
 
-  // Open the OS file picker (the input is hidden)
   const openPicker = (): void => {
     if (!isDisabled) inputRef.current?.click();
   };
 
-  // When the user selects files in the dialog
   const onFilesPicked: React.ChangeEventHandler<HTMLInputElement> = (e): void => {
     const picked = Array.from(e.currentTarget.files ?? []);
 
@@ -408,10 +326,8 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     let msg = '';
 
     if (isSingleSelection) {
-      // Single mode: take the first file only
       next = picked.slice(0, 1);
     } else {
-      // Multi mode: append to any existing selection, respecting maxFiles
       const already = files.length;
       const capacity = isDefined(maxFiles) ? Math.max(0, maxFiles - already) : picked.length;
 
@@ -426,20 +342,16 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       }
     }
 
-    // If count looks good, still check per-file size and "required"
     if (!msg) msg = validateSelection(next);
 
-    // Update local state + propagate error/value to the form
     setFiles(next);
     setError(msg);
-    raw.GlobalErrorHandle(id, msg === '' ? undefined : msg);
-    commitValue(next);
+    raw.GlobalErrorHandle(id, msg === '' ? null : msg); // “no error” → null
+    commitNewFiles(next);
 
-    // Reset the input so the same file can be selected again if needed
     if (inputRef.current) inputRef.current.value = '';
   };
 
-  // Remove a single file by index (for multi-select scenario)
   const removeAt = React.useCallback(
     (idx: number): void => {
       const next = files.filter((_, i) => i !== idx);
@@ -447,32 +359,118 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
       setFiles(next);
       setError(msg);
-      raw.GlobalErrorHandle(id, msg === '' ? undefined : msg);
-      commitValue(next);
+      raw.GlobalErrorHandle(id, msg === '' ? null : msg);
+      commitNewFiles(next);
     },
-    [files, validateSelection, raw, id, commitValue]
+    [files, validateSelection, raw, id, commitNewFiles]
   );
 
-  // Wrap removeAt for Button onClick
   const handleRemove = React.useCallback(
     (idx: number): React.MouseEventHandler<HTMLButtonElement> =>
       (): void => removeAt(idx),
     [removeAt]
   );
 
-  // Clear local selection completely
   const clearAll = (): void => {
     const msg = required ? REQUIRED_MSG : '';
     setFiles([]);
     setError(msg);
-    raw.GlobalErrorHandle(id, msg || undefined);
-    commitValue([]);
+    raw.GlobalErrorHandle(id, msg === '' ? null : msg);
+    commitNewFiles([]);
     if (inputRef.current) inputRef.current.value = '';
   };
 
+  /* ----------------------- Delete existing attachment ----------------------- */
+  /**
+   * Confirms and then deletes an existing attachment using SharePoint REST.
+   * On success we remove it from local state.
+   */
+  const deleteExistingAttachment = React.useCallback(
+    async (fileName: string): Promise<void> => {
+      if (!context) return;
+
+      // Confirm with the user first
+      const ok = window.confirm(`Are you sure you want to delete "${fileName}"?`);
+      if (!ok) return;
+
+      const listTitle: string | undefined = (context as { list?: { title?: string } } | undefined)?.list?.title;
+      const listGuid: string | undefined = (context as { list?: { id?: string } } | undefined)?.list?.id;
+      const itemId: number | undefined = (context as { item?: { ID?: number } } | undefined)?.item?.ID;
+      const baseUrl: string | undefined =
+        (context as { pageContext?: { web?: { absoluteUrl?: string } } } | undefined)?.pageContext?.web?.absoluteUrl ??
+        (typeof window !== 'undefined' ? window.location.origin : undefined);
+
+      if (!baseUrl || !itemId || (!listGuid && !listTitle)) return;
+
+      const encTitle = listTitle ? encodeURIComponent(listTitle) : '';
+      const encFile = encodeURIComponent(fileName);
+      const idStr = encodeURIComponent(String(itemId));
+
+      // Try a few endpoint shapes; one will fit your environment
+      const urls: string[] = [];
+      if (listGuid) {
+        urls.push(
+          `${baseUrl}/_api/web/lists(guid'${listGuid}')/items(${idStr})/AttachmentFiles('${encFile}')`,
+          `${baseUrl}/web/lists(guid'${listGuid}')/items(${idStr})/AttachmentFiles('${encFile}')`
+        );
+      }
+      if (listTitle) {
+        urls.push(
+          `${baseUrl}/_api/web/lists/getbytitle('${encTitle}')/items(${idStr})/AttachmentFiles('${encFile}')`,
+          `${baseUrl}/web/lists/getbytitle('${encTitle}')/items(${idStr})/AttachmentFiles('${encFile}')`
+        );
+      }
+
+      setDeletingName(fileName);
+      let success = false;
+      let lastErr: unknown = null;
+
+      for (const spUrl of urls) {
+        try {
+          // Preferred: true DELETE
+          await getFetchAPI({
+            spUrl,
+            method: 'DELETE',
+            headers: { 'IF-MATCH': '*' },
+          });
+          success = true;
+          break;
+        } catch (e1: unknown) {
+          lastErr = e1;
+          // Fallback: POST with X-HTTP-Method override
+          try {
+            await getFetchAPI({
+              spUrl,
+              method: 'POST',
+              headers: {
+                'IF-MATCH': '*',
+                'X-HTTP-Method': 'DELETE',
+              },
+            });
+            success = true;
+            break;
+          } catch (e2: unknown) {
+            lastErr = e2;
+          }
+        }
+      }
+
+      setDeletingName(null);
+
+      if (success) {
+        setSpAttachments(prev =>
+          Array.isArray(prev) ? prev.filter(a => a.FileName !== fileName) : prev
+        );
+      } else {
+        const msg = lastErr instanceof Error ? lastErr.message : 'Failed to delete the attachment.';
+        setLoadError(msg);
+      }
+    },
+    [context]
+  );
+
   /* ------------------------------- Render ------------------------------- */
 
-  // If the field is hidden by rule, render nothing (but keep DOM consistent)
   if (isHidden) return <div hidden className="fieldClass" />;
 
   return (
@@ -483,10 +481,10 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
         validationMessage={error || undefined}
         validationState={error ? 'error' : undefined}
       >
-        {/* ===== Existing SP attachments (Edit/View only) ===== */}
+        {/* ===== Existing SP attachments (Edit/View) ===== */}
         {!isNewMode && (
           <div style={{ marginBottom: 8 }}>
-            {loadingSP && <Text size={200}>Loading attachments…</Text>}
+            {loadingSP && <Text size={200}><Spinner size="tiny" />&nbsp;Loading attachments…</Text>}
 
             {!loadingSP && loadError && (
               <Text size={200} aria-live="polite">
@@ -496,37 +494,52 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
             {!loadingSP && !loadError && Array.isArray(spAttachments) && spAttachments.length > 0 && (
               <div style={{ display: 'grid', gap: 6 }}>
-                {spAttachments.map((a, i) => (
-                  <div
-                    key={`${a.ServerRelativeUrl}-${i}`}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      padding: '6px 10px',
-                      borderRadius: 8,
-                      border: '1px solid var(--colorNeutralStroke1)',
-                    }}
-                  >
-                    <DocumentRegular />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div
-                        style={{
-                          fontWeight: 500,
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                        }}
-                      >
-                        {/* Link to open the attachment in a new tab */}
-                        <Link href={a.ServerRelativeUrl} target="_blank" rel="noreferrer">
-                          {a.FileName}
-                        </Link>
+                {spAttachments.map((a) => {
+                  const busy = deletingName === a.FileName;
+                  return (
+                    <div
+                      key={a.ServerRelativeUrl}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '6px 10px',
+                        borderRadius: 8,
+                        border: '1px solid var(--colorNeutralStroke1)',
+                      }}
+                    >
+                      <DocumentRegular />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        {/* Show ONLY filename (no path) */}
+                        <div
+                          style={{
+                            fontWeight: 500,
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          }}
+                          title={a.FileName}
+                        >
+                          <Link href={a.ServerRelativeUrl} target="_blank" rel="noreferrer">
+                            {a.FileName}
+                          </Link>
+                        </div>
                       </div>
-                      <Text size={200}>{a.ServerRelativeUrl}</Text>
+
+                      {/* Confirm + delete (makes REST call on confirm) */}
+                      <Button
+                        size="small"
+                        appearance="secondary"
+                        icon={<DismissRegular />}
+                        disabled={busy || isDisabled}
+                        aria-label={`Delete ${a.FileName}`}
+                        onClick={(): void => { void deleteExistingAttachment(a.FileName); }}
+                      >
+                        {busy ? 'Deleting…' : 'Delete'}
+                      </Button>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -536,15 +549,14 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           </div>
         )}
 
-        {/* ===== Hidden input (actual file control) =====
-            We keep it hidden and trigger it with a styled Button for nicer UX. */}
+        {/* ===== Hidden input (actual file control) ===== */}
         <input
-          id={id}            /* id matches your field id prop */
-          name={displayName} /* name attribute shows the displayName */
+          id={id}
+          name={displayName}
           ref={inputRef}
           type="file"
           multiple={!isSingleSelection}
-          accept={accept}
+          accept={accept /* omit to allow any type */}
           style={{ display: 'none' }}
           onChange={onFilesPicked}
           disabled={isDisabled}
@@ -578,7 +590,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
             </Button>
           )}
 
-          {/* Describe constraints (accepted types, size, count) */}
           {(accept || isDefined(maxFileSizeMB) || (!isSingleSelection && isDefined(maxFiles))) && (
             <Text size={200} wrap>
               {accept && (
@@ -616,6 +627,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                     }}
+                    title={f.name}
                   >
                     {f.name}
                   </div>
@@ -624,7 +636,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                   </Text>
                 </div>
 
-                {/* Remove a single file from the local selection */}
                 <Button
                   size="small"
                   icon={<DismissRegular />}
@@ -637,7 +648,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           </div>
         )}
 
-        {/* Optional helper text */}
         {description !== '' && <div className="descriptionText" style={{ marginTop: 6 }}>{description}</div>}
       </Field>
     </div>
