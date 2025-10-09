@@ -39,11 +39,16 @@ export async function getFetchAPI(props: FetchAPInfo): Promise<any> { // eslint-
           return Promise.reject(`Fetch API request failed with staus ${response.status}: ${response.statusText}`);
         }
       } else {
-        // ADDED: handle DELETE responses (often empty)
-        // Keep legacy behavior for everything else (xml/json below).
+        // ADDED: safe read of "X-HTTP-Method" without upsetting TS
+        const headersObj = (props.headers ?? {}) as Record<string, unknown>;
+        const xHttpMethod =
+        typeof headersObj['X-HTTP-Method'] === 'string'
+            ? (headersObj['X-HTTP-Method'] as string)
+            : '';
+
+        // DELETE if real method is DELETE, or X-HTTP-Method spoof is DELETE
         const isDelete =
-          props.method?.toUpperCase() === 'DELETE' ||
-          (props.headers && String(props.headers['X-HTTP-Method']).toUpperCase() === 'DELETE');
+        props.method?.toUpperCase() === 'DELETE' || xHttpMethod.toUpperCase() === 'DELETE';
 
         if (isDelete) {
           // Many SP delete endpoints return 200/204 with no content.
