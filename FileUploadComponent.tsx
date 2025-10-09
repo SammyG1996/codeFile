@@ -40,7 +40,8 @@ type FormCtxShape = {
   FormData?: Record<string, unknown>;
   FormMode?: number;
   GlobalFormData: (id: string, value: unknown) => void;
-  GlobalErrorHandle: (id: string, error: string | null) => void;
+  // UPDATED: error uses `string | undefined` (undefined = no error)
+  GlobalErrorHandle: (id: string, error: string | undefined) => void;
 
   isDisabled?: boolean;
   disabled?: boolean;
@@ -323,7 +324,8 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
     setFiles(next);
     setError(msg);
-    ctx.GlobalErrorHandle(id, msg === '' ? null : msg);
+    // Use `undefined` to signal "no error"
+    ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
     commitNewFiles(next);
 
     if (inputRef.current) inputRef.current.value = '';
@@ -335,7 +337,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       const msg = validateSelection(next);
       setFiles(next);
       setError(msg);
-      ctx.GlobalErrorHandle(id, msg === '' ? null : msg);
+      ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
       commitNewFiles(next);
     },
     [files, validateSelection, ctx, id, commitNewFiles]
@@ -351,12 +353,12 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     const msg = required ? REQUIRED_MSG : '';
     setFiles([]);
     setError(msg);
-    ctx.GlobalErrorHandle(id, msg === '' ? null : msg);
+    ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
     commitNewFiles([]);
     if (inputRef.current) inputRef.current.value = '';
   };
 
-  /* ---------------- Delete an existing SP attachment (now uses getFetchAPI) ---------------- */
+  /* ---------------- Delete an existing SP attachment (uses getFetchAPI) ---------------- */
 
   const deleteExistingAttachment = React.useCallback(
     async (fileName: string): Promise<void> => {
@@ -602,7 +604,14 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                 <Button
                   size="small"
                   icon={<DismissRegular />}
-                  onClick={handleRemove(i)}
+                  onClick={(): void => {
+                    const next = files.filter((_, idx) => idx !== i);
+                    const msg = validateSelection(next);
+                    setFiles(next);
+                    setError(msg);
+                    ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
+                    commitNewFiles(next);
+                  }}
                   disabled={isDisabled}
                   aria-label={`Remove ${f.name}`}
                 />
