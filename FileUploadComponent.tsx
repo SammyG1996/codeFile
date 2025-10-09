@@ -4,6 +4,7 @@
  * - NEW mode: pick local files; selection is written to GlobalFormData.
  * - EDIT/VIEW mode: loads existing SharePoint attachments and lets users delete
  *   them (with a confirm prompt). Deletion uses getFetchAPI (digest handled there).
+ * - GlobalErrorHandle expects `undefined` (not null) for "no error".
  */
 
 import * as React from 'react';
@@ -40,7 +41,7 @@ type FormCtxShape = {
   FormData?: Record<string, unknown>;
   FormMode?: number;
   GlobalFormData: (id: string, value: unknown) => void;
-  // UPDATED: error uses `string | undefined` (undefined = no error)
+  // NOTE: undefined = no error
   GlobalErrorHandle: (id: string, error: string | undefined) => void;
 
   isDisabled?: boolean;
@@ -343,12 +344,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     [files, validateSelection, ctx, id, commitNewFiles]
   );
 
-  const handleRemove = React.useCallback(
-    (idx: number): React.MouseEventHandler<HTMLButtonElement> =>
-      (): void => removeAt(idx),
-    [removeAt]
-  );
-
   const clearAll = (): void => {
     const msg = required ? REQUIRED_MSG : '';
     setFiles([]);
@@ -539,7 +534,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
         {/* Action row */}
         <div className={className} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <Button appearance="primary" icon={<AttachRegular />} onClick={openPicker} disabled={isDisabled}>
+          <Button appearance="primary" icon={<AttachRegular />} onClick={(): void => { if (!isDisabled) inputRef.current?.click(); }} disabled={isDisabled}>
             {files.length === 0
               ? isSingleSelection
                 ? 'Choose file'
