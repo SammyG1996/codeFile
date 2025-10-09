@@ -41,7 +41,7 @@ type FormCtxShape = {
   FormData?: Record<string, unknown>;
   FormMode?: number;
   GlobalFormData: (id: string, value: unknown) => void;
-  // NOTE: undefined = no error
+  // NOTE: undefined = no error (changed from null)
   GlobalErrorHandle: (id: string, error: string | undefined) => void;
 
   isDisabled?: boolean;
@@ -325,7 +325,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
     setFiles(next);
     setError(msg);
-    // Use `undefined` to signal "no error"
+    // CHANGE: pass `undefined` (not null) when no error
     ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
     commitNewFiles(next);
 
@@ -338,6 +338,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       const msg = validateSelection(next);
       setFiles(next);
       setError(msg);
+      // CHANGE: pass `undefined` when no error
       ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
       commitNewFiles(next);
     },
@@ -348,6 +349,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     const msg = required ? REQUIRED_MSG : '';
     setFiles([]);
     setError(msg);
+    // CHANGE: pass `undefined` when no error
     ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
     commitNewFiles([]);
     if (inputRef.current) inputRef.current.value = '';
@@ -534,7 +536,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
         {/* Action row */}
         <div className={className} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <Button appearance="primary" icon={<AttachRegular />} onClick={(): void => { if (!isDisabled) inputRef.current?.click(); }} disabled={isDisabled}>
+          <Button appearance="primary" icon={<AttachRegular />} onClick={openPicker} disabled={isDisabled}>
             {files.length === 0
               ? isSingleSelection
                 ? 'Choose file'
@@ -599,14 +601,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                 <Button
                   size="small"
                   icon={<DismissRegular />}
-                  onClick={(): void => {
-                    const next = files.filter((_, idx) => idx !== i);
-                    const msg = validateSelection(next);
-                    setFiles(next);
-                    setError(msg);
-                    ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
-                    commitNewFiles(next);
-                  }}
+                  onClick={(): void => removeAt(i)}
                   disabled={isDisabled}
                   aria-label={`Remove ${f.name}`}
                 />
