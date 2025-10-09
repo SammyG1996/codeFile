@@ -1,19 +1,9 @@
 /**
  * FileUploadComponent.tsx
- * -----------------------------------------------------------------------------
  * Fluent UI v9 file picker integrated with SPFx Form Customizer.
- *
- * • NEW mode: lets user pick local files (does not upload here). Selection is
- *   written to GlobalFormData so your submit component can upload on save.
- * • EDIT/VIEW mode: lists existing SharePoint attachments. Each row has a
- *   Delete button. Deleting asks for confirmation and then uses *spHttpClient*
- *   (digest handled for you) to call the SharePoint REST API. On success the
- *   row is removed locally.
- *
- * Notes
- * - `accept` is optional. Omit to allow any type.
- * - Field label is `displayName`. The input’s `id` is the `id` prop.
- * - GlobalErrorHandle receives *null* when there is no error.
+ * - NEW mode: pick local files; selection is written to GlobalFormData.
+ * - EDIT/VIEW mode: loads existing SharePoint attachments and lets users delete
+ *   them (with a confirm prompt). Deletion uses getFetchAPI (digest handled there).
  */
 
 import * as React from 'react';
@@ -22,7 +12,6 @@ import { DismissRegular, DocumentRegular, AttachRegular } from '@fluentui/react-
 
 import { DynamicFormContext } from './DynamicFormContext';
 import type { FormCustomizerContext } from '@microsoft/sp-listview-extensibility';
-import { SPHttpClient, SPHttpClientResponse } from '@microsoft/sp-http';
 import { getFetchAPI } from '../Utilis/getFetchApi';
 
 /* -------------------------------- Types -------------------------------- */
@@ -31,17 +20,10 @@ export interface FileUploadProps {
   id: string;
   displayName: string;
 
-  /** Allow selecting multiple files (default false). If maxFiles === 1 we treat as single. */
   multiple?: boolean;
-
-  /** OPTIONAL accept filter like .pdf,.docx,image/* — omit to accept any type. */
-  accept?: string;
-
-  /** OPTIONAL per-file size limit in MB. */
-  maxFileSizeMB?: number;
-
-  /** OPTIONAL max file count (only applies when multiple = true). */
-  maxFiles?: number;
+  accept?: string;            // omit to allow any type
+  maxFileSizeMB?: number;     // per-file limit
+  maxFiles?: number;          // total count (only if multiple)
 
   isRequired?: boolean;
   description?: string;
@@ -142,23 +124,19 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     context,
   } = props;
 
-  // Pull the DynamicFormContext services
   const ctx = React.useContext(DynamicFormContext) as unknown as FormCtxShape;
 
-  // Modes from your provider: 8 = NEW, 4 = VIEW/DISPLAY
   const FormData = ctx.FormData;
   const FormMode = ctx.FormMode ?? 0;
   const isNewMode = FormMode === 8;
   const isDisplayForm = FormMode === 4;
 
-  // Disabled / hidden decisions
   const disabledFromCtx = getCtxFlag(ctx as unknown as Record<string, unknown>, [
     'isDisabled', 'disabled', 'formDisabled', 'Disabled',
   ]);
   const AllDisabledFields = ctx.AllDisabledFields;
   const AllHiddenFields = ctx.AllHiddenFields;
 
-  // Local state
   const [required, setRequired] = React.useState<boolean>(Boolean(isRequired));
   const [isDisabled, setIsDisabled] = React.useState<boolean>(
     isDisplayForm || disabledFromCtx || Boolean(submitting) || isListed(AllDisabledFields, displayName)
@@ -176,7 +154,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   const inputRef = React.useRef<HTMLInputElement>(null);
   const isSingleSelection = !multiple || maxFiles === 1;
 
-  // Keep flags in sync
   React.useEffect(() => setRequired(Boolean(isRequired)), [isRequired]);
 
   React.useEffect(() => {
@@ -194,7 +171,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   React.useEffect((): void | (() => void) => {
     if (isNewMode) return;
 
-    // Skip network call if provider says there are none
     const hint = readAttachmentsHint(FormData);
     if (hint === false) {
       setSpAttachments([]);
@@ -203,7 +179,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       return;
     }
 
-    // Build URL parts from SPFx context
     const listTitle: string | undefined = (context as { list?: { title?: string } } | undefined)?.list?.title;
     const listGuid: string | undefined = (context as { list?: { id?: string } } | undefined)?.list?.id;
     const itemId: number | undefined = (context as { item?: { ID?: number } } | undefined)?.item?.ID;
@@ -246,7 +221,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       for (const spUrl of urls) {
         if (cancelled) return;
         try {
-          // Your helper is fine for GET (no digest required)
           const respUnknown: unknown = await getFetchAPI({
             spUrl,
             method: 'GET',
@@ -291,7 +265,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
         setLoadingSP(false);
         setLoadError(msg);
       }
-    })().catch(() => { /* noop for lint */ });
+    })().catch(() => { /* noop */ });
 
     return (): void => { cancelled = true; };
   }, [isNewMode, FormData, context]);
@@ -382,7 +356,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     if (inputRef.current) inputRef.current.value = '';
   };
 
-  /* ---------------- Delete an existing SP attachment (uses spHttpClient) ---------------- */
+  /* ---------------- Delete an existing SP attachment (now uses getFetchAPI) ---------------- */
 
   const deleteExistingAttachment = React.useCallback(
     async (fileName: string): Promise<void> => {
@@ -423,36 +397,31 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
       for (const spUrl of urls) {
         try {
-          // Preferred: true DELETE (spHttpClient injects digest for us)
-          const res: SPHttpClientResponse = await context.spHttpClient.fetch(
+          // Try DELETE first (getFetchAPI adds digest)
+          await getFetchAPI({
             spUrl,
-            SPHttpClient.configurations.v1,
-            {
-              method: 'DELETE',
-              headers: { 'IF-MATCH': '*', Accept: 'application/json;odata=nometadata' }
-            }
-          );
-
-          if (res.ok || res.status === 204) { success = true; break; }
-
+            method: 'DELETE',
+            headers: { 'IF-MATCH': '*', Accept: 'application/json;odata=nometadata' }
+          });
+          success = true;
+          break;
+        } catch (e1) {
           // Fallback: POST + X-HTTP-Method: DELETE
-          const res2: SPHttpClientResponse = await context.spHttpClient.fetch(
-            spUrl,
-            SPHttpClient.configurations.v1,
-            {
+          try {
+            await getFetchAPI({
+              spUrl,
               method: 'POST',
               headers: {
                 'IF-MATCH': '*',
                 'X-HTTP-Method': 'DELETE',
-                'Accept': 'application/json;odata=nometadata'
+                Accept: 'application/json;odata=nometadata'
               }
-            }
-          );
-
-          if (res2.ok || res2.status === 204) { success = true; break; }
-          lastErr = new Error(`Delete failed: ${res.status} / ${res2.status}`);
-        } catch (e) {
-          lastErr = e;
+            });
+            success = true;
+            break;
+          } catch (e2) {
+            lastErr = e2 ?? e1;
+          }
         }
       }
 
@@ -515,7 +484,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                     >
                       <DocumentRegular />
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        {/* Show only the filename; link opens file in new tab */}
+                        {/* show only file name; link to open in new tab */}
                         <div
                           style={{
                             fontWeight: 500,
