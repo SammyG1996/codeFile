@@ -1,10 +1,19 @@
 /**
  * FileUploadComponent.tsx
- * Fluent UI v9 file picker integrated with SPFx Form Customizer.
- * - NEW mode: pick local files; selection is written to GlobalFormData.
- * - EDIT/VIEW mode: loads existing SharePoint attachments and lets users delete
- *   them (with a confirm prompt). Deletion uses getFetchAPI (digest handled there).
- * - GlobalErrorHandle expects `undefined` (not null) for "no error".
+ *
+ * Updates per request:
+ * - Combined size limit for selected files = 250 MB (fixed; not a prop; no UI copy).
+ * - No cap on number of files.
+ * - All file types are allowed (no "accept" prop, no messaging).
+ * - Filename validation: only [A-Za-z0-9_] plus dots as extension separators.
+ *   Examples allowed: "Report_Q1.pdf", "image_01.png", "archive_2024.tar.gz"
+ *   Examples blocked: "my file.pdf", "report-01.pdf", "a@b.pdf"
+ *
+ * Other behavior unchanged:
+ * - NEW mode: local files written to GlobalFormData(id).
+ * - EDIT/VIEW: existing SP attachments are listed; user can DELETE with confirm
+ *   (delete call made immediately via getFetchAPI).
+ * - GlobalErrorHandle(id, undefined) when no error.
  */
 
 import * as React from 'react';
@@ -21,10 +30,8 @@ export interface FileUploadProps {
   id: string;
   displayName: string;
 
+  /** Optional: allow single-file selection if false; default = true (multi). */
   multiple?: boolean;
-  accept?: string;            // omit to allow any type
-  maxFileSizeMB?: number;     // per-file limit
-  maxFiles?: number;          // total count (only if multiple)
 
   isRequired?: boolean;
   description?: string;
@@ -41,7 +48,6 @@ type FormCtxShape = {
   FormData?: Record<string, unknown>;
   FormMode?: number;
   GlobalFormData: (id: string, value: unknown) => void;
-  // NOTE: undefined = no error (changed from null)
   GlobalErrorHandle: (id: string, error: string | undefined) => void;
 
   isDisabled?: boolean;
@@ -54,11 +60,12 @@ type FormCtxShape = {
 
 /* ------------------------------- Helpers ------------------------------- */
 
-const REQUIRED_MSG = 'Please select a file.';
-const TOO_LARGE_MSG = (name: string, limitMB: number): string =>
-  `“${name}” exceeds the maximum size of ${limitMB} MB.`;
-const TOO_MANY_MSG = (limit: number): string =>
-  `You can attach up to ${limit} file${limit === 1 ? '' : 's'}.`;
+const REQUIRED_MSG = 'Please select at least one file.';
+const NAME_INVALID_MSG = (name: string): string =>
+  `“${name}” has invalid characters. Only letters, numbers, underscore (_), and dots for extensions are allowed.`;
+const TOTAL_LIMIT_MSG = 'Selected files exceed the 250 MB total size limit.';
+
+const TOTAL_LIMIT_BYTES = 250 * 1024 * 1024; // 250 MB
 
 const isDefined = <T,>(v: T | undefined): v is T => v !== undefined;
 
@@ -95,7 +102,7 @@ const formatBytes = (bytes: number): string => {
   return `${Number.isInteger(n) ? n.toFixed(0) : n.toFixed(2)} ${units[i]}`;
 };
 
-/** Read common “has attachments” hints from the FormData snapshot. */
+/** FormData hint for existing attachments (boolean/number variants). */
 const readAttachmentsHint = (fd: Record<string, unknown> | undefined): boolean | undefined => {
   if (!fd) return undefined;
   const keys = ['Attachments', 'attachments', 'AttachmentCount', 'attachmentCount'] as const;
@@ -109,16 +116,18 @@ const readAttachmentsHint = (fd: Record<string, unknown> | undefined): boolean |
   return undefined;
 };
 
+// Allows letters, numbers, underscores, spaces, and dots (for extensions)
+const validFileName = (name: string): boolean =>
+  /^[A-Za-z0-9_ ]+(\.[A-Za-z0-9_ ]+)*$/.test(name);
+
+
 /* ------------------------------ Component ------------------------------ */
 
 export default function FileUploadComponent(props: FileUploadProps): JSX.Element {
   const {
     id,
     displayName,
-    multiple = false,
-    accept,
-    maxFileSizeMB,
-    maxFiles,
+    multiple = true, // default: allow multiple
     isRequired,
     description = '',
     className,
@@ -154,7 +163,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   const [deletingName, setDeletingName] = React.useState<string | null>(null);
 
   const inputRef = React.useRef<HTMLInputElement>(null);
-  const isSingleSelection = !multiple || maxFiles === 1;
 
   React.useEffect(() => setRequired(Boolean(isRequired)), [isRequired]);
 
@@ -277,22 +285,27 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   const validateSelection = React.useCallback(
     (list: File[]): string => {
       if (required && list.length === 0) return REQUIRED_MSG;
-      if (!isSingleSelection && isDefined(maxFiles) && list.length > maxFiles) return TOO_MANY_MSG(maxFiles);
-      if (isDefined(maxFileSizeMB)) {
-        const limit = maxFileSizeMB * 1024 * 1024;
-        for (const f of list) if (f.size > limit) return TOO_LARGE_MSG(f.name, maxFileSizeMB);
+
+      // Validate names
+      for (const f of list) {
+        if (!validFileName(f.name)) return NAME_INVALID_MSG(f.name);
       }
+
+      // Combined size <= 250 MB
+      const totalBytes = list.reduce((sum, f) => sum + (f?.size ?? 0), 0);
+      if (totalBytes > TOTAL_LIMIT_BYTES) return TOTAL_LIMIT_MSG;
+
       return '';
     },
-    [required, isSingleSelection, maxFiles, maxFileSizeMB]
+    [required]
   );
 
   const commitNewFiles = React.useCallback(
     (list: File[]): void => {
-      const payload: unknown = list.length === 0 ? undefined : isSingleSelection ? list[0] : list;
+      const payload: unknown = list.length === 0 ? undefined : (multiple ? list : list[0]);
       ctx.GlobalFormData(id, payload);
     },
-    [ctx, id, isSingleSelection]
+    [ctx, id, multiple]
   );
 
   /* ------------------------------- Handlers ----------------------------- */
@@ -301,31 +314,12 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
   const onFilesPicked: React.ChangeEventHandler<HTMLInputElement> = (e): void => {
     const picked = Array.from(e.currentTarget.files ?? []);
-    let next: File[] = [];
-    let msg = '';
+    const next = multiple ? files.concat(picked) : picked.slice(0, 1);
 
-    if (isSingleSelection) {
-      next = picked.slice(0, 1);
-    } else {
-      const already = files.length;
-      const capacity = isDefined(maxFiles) ? Math.max(0, maxFiles - already) : picked.length;
-
-      if (already === 0) {
-        const toTake = isDefined(maxFiles) ? Math.min(picked.length, maxFiles) : picked.length;
-        next = picked.slice(0, toTake);
-        if (isDefined(maxFiles) && picked.length > maxFiles) msg = TOO_MANY_MSG(maxFiles);
-      } else {
-        const toAdd = picked.slice(0, capacity);
-        next = files.concat(toAdd);
-        if (isDefined(maxFiles) && picked.length > capacity) msg = TOO_MANY_MSG(maxFiles);
-      }
-    }
-
-    if (!msg) msg = validateSelection(next);
+    const msg = validateSelection(next);
 
     setFiles(next);
     setError(msg);
-    // CHANGE: pass `undefined` (not null) when no error
     ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
     commitNewFiles(next);
 
@@ -338,7 +332,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       const msg = validateSelection(next);
       setFiles(next);
       setError(msg);
-      // CHANGE: pass `undefined` when no error
       ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
       commitNewFiles(next);
     },
@@ -349,7 +342,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     const msg = required ? REQUIRED_MSG : '';
     setFiles([]);
     setError(msg);
-    // CHANGE: pass `undefined` when no error
     ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
     commitNewFiles([]);
     if (inputRef.current) inputRef.current.value = '';
@@ -396,7 +388,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
       for (const spUrl of urls) {
         try {
-          // Try DELETE first (getFetchAPI adds digest)
           await getFetchAPI({
             spUrl,
             method: 'DELETE',
@@ -405,7 +396,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           success = true;
           break;
         } catch (e1) {
-          // Fallback: POST + X-HTTP-Method: DELETE
           try {
             await getFetchAPI({
               spUrl,
@@ -483,7 +473,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                     >
                       <DocumentRegular />
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        {/* show only file name; link to open in new tab */}
                         <div
                           style={{
                             fontWeight: 500,
@@ -527,8 +516,8 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           name={displayName}
           ref={inputRef}
           type="file"
-          multiple={!isSingleSelection}
-          accept={accept}
+          multiple={multiple}
+          /* no accept -> all types allowed */
           style={{ display: 'none' }}
           onChange={onFilesPicked}
           disabled={isDisabled}
@@ -538,30 +527,14 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
         <div className={className} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <Button appearance="primary" icon={<AttachRegular />} onClick={openPicker} disabled={isDisabled}>
             {files.length === 0
-              ? isSingleSelection
-                ? 'Choose file'
-                : 'Choose files'
-              : isSingleSelection
-              ? 'Choose different file'
-              : 'Add more files'}
+              ? multiple ? 'Choose files' : 'Choose file'
+              : multiple ? 'Add more files' : 'Choose different file'}
           </Button>
 
           {files.length > 0 && (
             <Button appearance="secondary" onClick={clearAll} icon={<DismissRegular />} disabled={isDisabled}>
               Clear
             </Button>
-          )}
-
-          {(accept || isDefined(maxFileSizeMB) || (!isSingleSelection && isDefined(maxFiles))) && (
-            <Text size={200} wrap>
-              {accept && (
-                <span>
-                  Allowed: <code>{accept}</code>.{' '}
-                </span>
-              )}
-              {isDefined(maxFileSizeMB) && <span>Max size: {maxFileSizeMB} MB/file. </span>}
-              {!isSingleSelection && isDefined(maxFiles) && <span>Max files: {maxFiles}.</span>}
-            </Text>
           )}
         </div>
 
