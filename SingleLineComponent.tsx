@@ -181,8 +181,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     submitting,
   } = props;
 
-  // Pull all needed pieces from context. We don't assert a strict context type;
-  // instead we read the keys we need safely.
+  // Pull needed pieces from context. We read keys safely rather than asserting a strict type.
   const formCtx = React.useContext(DynamicFormContext);
   const ctx = formCtx as unknown as Record<string, unknown>;
 
@@ -216,9 +215,8 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const baseHidden   = isListed(AllHiddenFields, displayName);
 
   /**
-   * We remember whether this field is *inherently disabled* (by rules) in `defaultDisable`.
-   * This mirrors the pattern from the other codebase and allows "submit-time disabling"
-   * to *not* override real disabled rules.
+   * Remember whether this field is *inherently disabled* by rules.
+   * This lets "submit-time disabling" *not* override real disabled rules.
    */
   const [defaultDisable, setDefaultDisable] = React.useState<boolean>(baseDisabled);
   React.useEffect(() => {
@@ -227,8 +225,8 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   /**
    * Final `isDisabled` used by the Input.
-   * If the field is inherently disabled (`defaultDisable`), it stays disabled before/during/after submit.
-   * Otherwise, we only disable it while `submitting` is true.
+   * If inherently disabled, it stays disabled before/during/after submit.
+   * Otherwise, it disables only while submitting.
    */
   const [isDisabled, setIsDisabled] = React.useState<boolean>(defaultDisable || !!submitting);
   React.useEffect(() => {
@@ -255,12 +253,19 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   /** DOM ref to the actual input element for external access via GlobalRefs. */
   const elemRef = React.useRef<HTMLInputElement>(null);
+
+  /**
+   * IMPORTANT: Call GlobalRefs once on mount (and clean up on unmount).
+   * Do NOT depend on GlobalRefs in the deps array. If the provider recreates
+   * that function on every render, depending on it causes an infinite loop.
+   */
   React.useEffect(() => {
-    if (GlobalRefs) GlobalRefs(elemRef.current ?? undefined);
+    GlobalRefs?.(elemRef.current ?? undefined);
     return () => {
-      if (GlobalRefs) GlobalRefs(undefined);
+      GlobalRefs?.(undefined);
     };
-  }, [GlobalRefs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // run once
 
   /* ───────────────────────── number helpers ───────────────────────── */
 
@@ -405,7 +410,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
     if (spaceLeft <= 0) {
       e.preventDefault();
-      // Do not change value; just surface the error after first blur.
       if (touched) setError(lengthMsg);
       return;
     }
@@ -435,6 +439,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     if (!pasteText) return;
 
     const input = e.currentTarget;
+    a:
     const { start, end } = getSelectionRange(input);
     const projected = input.value.slice(0, start) + pasteText + input.value.slice(end);
     const sanitized0 = sanitizeDecimal(projected);
