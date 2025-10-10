@@ -56,7 +56,7 @@ import { DynamicFormContext } from './DynamicFormContext';
    ════════════════════════ */
 
 export interface SingleLineFieldProps {
-  /** Unique identifier for this field. Also used as the <Input id>. */
+  /** Unique business identifier for this field (used for data/commits; NOT used directly as DOM id). */
   id: string;
   /** Human-friendly name for this field. Used for the label and the <Input name>. */
   displayName: string;
@@ -255,9 +255,9 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const elemRef = React.useRef<HTMLInputElement>(null);
 
   /**
-   * IMPORTANT: Call GlobalRefs once on mount (and clean up on unmount).
-   * Do NOT depend on GlobalRefs in the deps array. If the provider recreates
-   * that function on every render, depending on it causes an infinite loop.
+   * Call GlobalRefs once on mount (and clean up on unmount).
+   * IMPORTANT: Do not depend on GlobalRefs in the deps array; some providers recreate
+   * that function every render, which can cause a loop if we depend on it.
    */
   React.useEffect(() => {
     GlobalRefs?.(elemRef.current ?? undefined);
@@ -314,7 +314,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       const dot = val.indexOf('.');
       if (dot === -1) return { value: val, trimmed: false };
       const whole = val.slice(0, dot + 1);
-      const frac = val.slice(dot + 1);
+      const frac = val.slice(0, dot + 1) ? val.slice(dot + 1) : '';
       if (frac.length <= decimalLimit) return { value: val, trimmed: false };
       return { value: whole + frac.slice(0, decimalLimit), trimmed: true };
     },
@@ -439,7 +439,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     if (!pasteText) return;
 
     const input = e.currentTarget;
-    a:
     const { start, end } = getSelectionRange(input);
     const projected = input.value.slice(0, start) + pasteText + input.value.slice(end);
     const sanitized0 = sanitizeDecimal(projected);
@@ -478,7 +477,8 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
     // TEXT
     setLocalVal(raw);
-    if (isDefined(maxLength) && raw.length >= maxLength) {
+    // IMPORTANT: equal to maxLength is allowed; only error if strictly greater.
+    if (isDefined(maxLength) && raw.length > maxLength) {
       if (touched) setError(lengthMsg);
       return;
     }
@@ -496,7 +496,9 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     setTouched(true);
 
     const valueForValidation = isFile ? splitExt(localVal).base : localVal;
-    const tooLong = !isNumber && isDefined(maxLength) && valueForValidation.length >= (maxLength ?? Infinity);
+
+    // IMPORTANT: equal to maxLength is valid; only error if strictly greater.
+    const tooLong = !isNumber && isDefined(maxLength) && valueForValidation.length > (maxLength ?? Infinity);
     const finalError = tooLong ? lengthMsg : validate(valueForValidation);
 
     setError(finalError);
@@ -514,12 +516,15 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   /* ───────────────────────── render ───────────────────────── */
 
+  // Use a DOM-safe, per-instance id to avoid collisions in the page
+  const inputDomId = `${id}__input`;
+
   // contentAfter: show file extension if in FILE mode; otherwise support % for numbers
   const extForAfter = isFile ? splitExt(localVal).ext : '';
   const after = (isFile && extForAfter)
-    ? <Text size={400} id={`${id}Ext`}>{extForAfter}</Text>
+    ? <Text size={400} id={`${inputDomId}Ext`}>{extForAfter}</Text>
     : (isNumber && contentAfter === 'percentage')
-      ? <Text size={400} id={`${id}Per`}>%</Text>
+      ? <Text size={400} id={`${inputDomId}Per`}>%</Text>
       : undefined;
 
   // What appears in the input: file base for FILE mode; raw local value otherwise
@@ -535,8 +540,8 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       >
         <Input
           ref={elemRef}
-          id={id}            /* from props */
-          name={displayName} /* from props */
+          id={inputDomId}     /* DOM id (namespaced to avoid collisions) */
+          name={displayName}  /* business name (as you requested) */
           className={className}
           placeholder={placeholder}
           value={displayValue}
