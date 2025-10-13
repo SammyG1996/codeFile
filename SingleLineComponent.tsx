@@ -13,7 +13,7 @@
  *  • Commit on blur (and on submit if focused)
  *  • Report validation via GlobalErrorHandle
  *  • Expose a ref via GlobalRefs
- *  • Apply centralized rules via formFieldsSetup (hardened so it can’t crash)
+ *  • Apply centralized rules via formFieldsSetup (hardened) with logs
  *
  * Example
  * -------
@@ -27,8 +27,10 @@ import { Field, Input, Text } from '@fluentui/react-components';
 import { DynamicFormContext } from './DynamicFormContext';
 import { formFieldsSetup, FormFieldsProps } from '../Utils/formFieldBased';
 
-/* ─────────────────────────────── Props ─────────────────────────────── */
+/* ───────────────────────── Debug toggle ───────────────────────── */
+const DEBUG = true;
 
+/* ───────────────────────────── Props ──────────────────────────── */
 export interface SingleLineFieldProps {
   id: string;
   displayName: string;
@@ -55,7 +57,7 @@ export interface SingleLineFieldProps {
   submitting?: boolean;
 }
 
-/* ──────────────────────────── Helpers & msgs ───────────────────────── */
+/* ───────────────────── Helpers & messages ─────────────────────── */
 
 const REQUIRED_MSG = 'This is a required field and cannot be blank!';
 const INVALID_NUM_MSG = 'Please enter valid numeric value!';
@@ -85,7 +87,40 @@ function asItems<T = unknown>(v: unknown): { items: T[] } {
   return { items: [] as T[] };
 }
 
-/* ───────────────────────────── Component ───────────────────────────── */
+/** Lowercase & trim. */
+const norm = (s: unknown): string => String(s ?? '').trim().toLowerCase();
+
+/** SharePoint-ish encoding: replace spaces with `_x0020_` (basic heuristic). */
+const toSPEncoded = (s: string): string => s.replace(/ /g, '_x0020_');
+
+/** Remove all non-alphanumerics to compare loosely across variants. */
+const toLoose = (s: string): string => s.replace(/[^a-z0-9]/gi, '').toLowerCase();
+
+/** Does a list (strings / {items}) contain a name matching id/displayName/variants? */
+function listHasName(list: unknown, id: string, displayName: string): boolean {
+  const arr: string[] =
+    Array.isArray(list) ? list.map(String)
+    : (list && typeof list === 'object' && Array.isArray((list as any).items))
+      ? (list as any).items.map(String)
+      : [];
+  const aliases = [
+    id,
+    displayName,
+    toSPEncoded(displayName),
+    toLoose(displayName),
+    toLoose(id),
+  ].map(norm);
+
+  return arr.some(item => {
+    const nItem = norm(item);
+    return (
+      aliases.includes(nItem) ||
+      aliases.includes(norm(toLoose(item)))
+    );
+  });
+}
+
+/* ─────────────────────────── Component ────────────────────────── */
 
 export default function SingleLineComponent(props: SingleLineFieldProps): JSX.Element {
   const {
@@ -105,7 +140,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     submitting,
   } = props;
 
-  /* ----- Context (read; keep loose so we don’t couple to provider shape) ----- */
+  /* ----- Context (loosely typed on purpose) ----- */
   const formCtx = React.useContext(DynamicFormContext);
   const ctx = formCtx as unknown as Record<string, unknown>;
 
@@ -115,19 +150,19 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const GlobalErrorHandle = ctx.GlobalErrorHandle as (id: string, error: string | null) => void;
   const GlobalRefs = (ctx.GlobalRefs as ((el: HTMLElement | undefined) => void) | undefined) ?? undefined;
 
-  const AllDisabledFields = ctx.AllDisabledFields;
-  const AllHiddenFields = ctx.AllHiddenFields;
+  const AllDisabledFields = ctx.AllDisabledFields; // could be array or {items:[]}
+  const AllHiddenFields = ctx.AllHiddenFields;     // same
   const userBasedPerms = ctx.userBasedPerms;
   const curUserInfo = ctx.curUserInfo;
   const listCols = ctx.listCols;
 
-  /* ----- Mode flags ----- */
+  /* ----- Modes ----- */
   const isDisplayForm = FormMode === 4;
   const isNumber = type === 'number';
   const isFile = type === 'file';
 
-  /* ----- Disabled/Hidden baseline (can be overridden by setup) ----- */
-  const baseDisabled = isDisplayForm; // your baseline rule (kept)
+  /* ----- Disabled/Hidden baseline (overridable) ----- */
+  const baseDisabled = isDisplayForm; // original baseline rule
   const baseHidden = false;
 
   const [defaultDisable, setDefaultDisable] = React.useState<boolean>(baseDisabled);
@@ -159,7 +194,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return () => GlobalRefs?.(undefined);
   }, []); // once
 
-  /* ----- Centralized rules: formFieldsSetup (hardened) ----- */
+  /* ----- Centralized rules: formFieldsSetup (hardened + logs) ----- */
   React.useEffect(() => {
     const propsForSetup: FormFieldsProps = {
       disabledList: asItems(AllDisabledFields),
@@ -167,28 +202,79 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       userBasedList:asItems(userBasedPerms),
       curUserList:  asItems(curUserInfo),
       curField:     id,
-      formStateData:asItems(FormData),  // some versions expect .items here
+      formStateData:asItems(FormData),  // some versions expect .items on this too
       listColumns:  asItems(listCols),
     } as any;
+
+    if (DEBUG) {
+      // eslint-disable-next-line no-console
+      console.log('[SingleLineComponent] setup input', {
+        id, displayName,
+        disabledList: propsForSetup.disabledList,
+        hiddenList: propsForSetup.hiddenList,
+        userBasedList: propsForSetup.userBasedList,
+        curUserList: propsForSetup.curUserList,
+        formStateData: propsForSetup.formStateData,
+        listColumns: propsForSetup.listColumns,
+      });
+    }
+
+    let appliedFromSetup = false;
 
     try {
       const raw = typeof formFieldsSetup === 'function' ? formFieldsSetup(propsForSetup) : [];
       const results = Array.isArray(raw) ? raw : [];
+      if (DEBUG) {
+        // eslint-disable-next-line no-console
+        console.log('[SingleLineComponent] setup results', results);
+      }
+
       for (const r of results) {
         if (!r || typeof r !== 'object') continue;
         if ('isDisabled' in r && r.isDisabled !== undefined) {
           const v = !!(r as any).isDisabled;
+          appliedFromSetup = true;
           setIsDisabled(v);
           setDefaultDisable(v);
+          if (DEBUG) console.log(`[SingleLineComponent] applied isDisabled=${v} from formFieldsSetup for ${id}`);
         }
         if ('isHidden' in r && r.isHidden !== undefined) {
+          appliedFromSetup = true;
           setIsHidden(!!(r as any).isHidden);
+          if (DEBUG) console.log(`[SingleLineComponent] applied isHidden=${(r as any).isHidden} from formFieldsSetup for ${id}`);
         }
       }
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn('formFieldsSetup failed for field', id, err);
     }
+
+    // Fallback: if setup didn’t explicitly return rules, derive from static lists.
+    if (!appliedFromSetup) {
+      const derivedDisable = listHasName(AllDisabledFields, id, displayName);
+      const derivedHidden  = listHasName(AllHiddenFields, id, displayName);
+
+      if (DEBUG) {
+        // eslint-disable-next-line no-console
+        console.log('[SingleLineComponent] fallback list check', {
+          id, displayName,
+          derivedDisable, derivedHidden,
+          disabledList: AllDisabledFields,
+          hiddenList: AllHiddenFields,
+        });
+      }
+
+      if (derivedDisable) {
+        setIsDisabled(true);
+        setDefaultDisable(true);
+        if (DEBUG) console.log(`[SingleLineComponent] fallback applied isDisabled=true for ${id}`);
+      }
+      if (derivedHidden) {
+        setIsHidden(true);
+        if (DEBUG) console.log(`[SingleLineComponent] fallback applied isHidden=true for ${id}`);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [AllDisabledFields, AllHiddenFields, userBasedPerms, curUserInfo, id, FormData, listCols]);
 
   /* ----- Number helpers ----- */
@@ -271,6 +357,11 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     setLocalVal(sanitized);
     setError('');
     setTouched(false);
+
+    if (DEBUG) {
+      // eslint-disable-next-line no-console
+      console.log('[SingleLineComponent] prefill', { id, fromNew, raw, sanitized });
+    }
   }, []); // once
 
   /* ----- Submit finalize (validate + commit if no blur yet) ----- */
@@ -283,6 +374,11 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     setTouched(true);
     setError(finalError);
     GlobalErrorHandle(id, finalError === '' ? null : finalError);
+
+    if (DEBUG) {
+      // eslint-disable-next-line no-console
+      console.log('[SingleLineComponent] submit finalize', { id, localVal, valueForValidation, finalError });
+    }
 
     if (isNumber) {
       const t = localVal.trim();
@@ -341,6 +437,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     if (!pasteText) return;
 
     const input = e.currentTarget;
+    the:
     const { start, end } = getSelectionRange(input);
     const projected = input.value.slice(0, start) + pasteText + input.value.slice(end);
     const sanitized0 = sanitizeDecimal(projected);
@@ -396,6 +493,11 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     setError(finalError);
     GlobalErrorHandle(id, finalError === '' ? null : finalError);
 
+    if (DEBUG) {
+      // eslint-disable-next-line no-console
+      console.log('[SingleLineComponent] blur commit', { id, localVal, valueForValidation, finalError });
+    }
+
     if (isNumber) {
       const t = localVal.trim();
       GlobalFormData(id, t === '' ? null : (Number.isNaN(Number(t)) ? null : Number(t)));
@@ -417,37 +519,44 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const displayValue = isFile ? splitExt(localVal).base : localVal;
 
   /* ----- Hidden? ----- */
-  if (isHidden) return <></>;
+  if (isHidden) {
+    if (DEBUG) console.log(`[SingleLineComponent] rendering nothing because hidden: ${id}`);
+    return <></>;
+  }
 
   /* ----- Render ----- */
-return (
-  <Field
-    label={displayName}
-    required={isRequired}
-    validationMessage={error !== '' ? error : undefined}
-    validationState={error !== '' ? 'error' : 'none'}
-    hint={description}  // ✅ was "description", must be "hint" in Fluent UI v9
-  >
-    <Input
-      ref={elemRef}
-      id={id}
-      name={displayName}
-      className={className}
-      placeholder={placeholder}
-      value={displayValue}
-      onChange={handleChange}
-      onBlur={handleBlur}
-      onPaste={isNumber ? handleNumberPaste : handleTextPaste}
-      disabled={isDisabled}
+  return (
+    <Field
+      label={displayName}
+      required={isRequired}
+      validationMessage={error !== '' ? error : undefined}
+      validationState={error !== '' ? 'error' : 'none'}
+      hint={description}  /* v9: use `hint`, not `description` */
+    >
+      <Input
+        ref={elemRef}
+        id={id}                 /* per requirement: use props.id */
+        name={displayName}      /* per requirement: use displayName */
+        className={className}
+        placeholder={placeholder}
+        value={displayValue}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        onPaste={isNumber ? handleNumberPaste : handleTextPaste}
+        disabled={isDisabled}
 
-      maxLength={!isNumber && isDefined(maxLength) ? maxLength : undefined}
-      type={isNumber ? 'number' : 'text'}
-      inputMode={isNumber ? 'decimal' : undefined}
-      step="any"
-      min={isNumber && isDefined(min) ? min : undefined}
-      max={isNumber && isDefined(max) ? max : undefined}
-      contentAfter={after}
-    />
-  </Field>
-);
+        /* TEXT/FILE ONLY */
+        maxLength={!isNumber && isDefined(maxLength) ? maxLength : undefined}
+
+        /* NUMBER ONLY */
+        type={isNumber ? 'number' : 'text'}   // FILE renders as text (we only display the name)
+        inputMode={isNumber ? 'decimal' : undefined}
+        step="any"
+        min={isNumber && isDefined(min) ? min : undefined}
+        max={isNumber && isDefined(max) ? max : undefined}
+
+        contentAfter={after}
+      />
+    </Field>
+  );
 }
