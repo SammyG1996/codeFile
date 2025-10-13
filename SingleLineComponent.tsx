@@ -13,7 +13,7 @@
  *  • Commit on blur (and on submit if focused)
  *  • Report validation via GlobalErrorHandle
  *  • Expose a ref via GlobalRefs
- *  • Apply centralized rules via formFieldsSetup (hardened) with logs
+ *  • Apply centralized rules via formFieldsSetup (now aligned with ComboBox pattern)
  *
  * Example
  * -------
@@ -80,46 +80,6 @@ function splitExt(name: string): { base: string; ext: string } {
   return { base: name.slice(0, i), ext: name.slice(i) };
 }
 
-/** Ensure a value is an object with `.items` array so `formFieldsSetup` can safely read `.items`. */
-function asItems<T = unknown>(v: unknown): { items: T[] } {
-  if (v && typeof v === 'object' && Array.isArray((v as any).items)) return v as { items: T[] };
-  if (Array.isArray(v)) return { items: v as T[] };
-  return { items: [] as T[] };
-}
-
-/** Lowercase & trim. */
-const norm = (s: unknown): string => String(s ?? '').trim().toLowerCase();
-
-/** SharePoint-ish encoding: replace spaces with `_x0020_` (basic heuristic). */
-const toSPEncoded = (s: string): string => s.replace(/ /g, '_x0020_');
-
-/** Remove all non-alphanumerics to compare loosely across variants. */
-const toLoose = (s: string): string => s.replace(/[^a-z0-9]/gi, '').toLowerCase();
-
-/** Does a list (strings / {items}) contain a name matching id/displayName/variants? */
-function listHasName(list: unknown, id: string, displayName: string): boolean {
-  const arr: string[] =
-    Array.isArray(list) ? list.map(String)
-    : (list && typeof list === 'object' && Array.isArray((list as any).items))
-      ? (list as any).items.map(String)
-      : [];
-  const aliases = [
-    id,
-    displayName,
-    toSPEncoded(displayName),
-    toLoose(displayName),
-    toLoose(id),
-  ].map(norm);
-
-  return arr.some(item => {
-    const nItem = norm(item);
-    return (
-      aliases.includes(nItem) ||
-      aliases.includes(norm(toLoose(item)))
-    );
-  });
-}
-
 /* ─────────────────────────── Component ────────────────────────── */
 
 export default function SingleLineComponent(props: SingleLineFieldProps): JSX.Element {
@@ -150,11 +110,12 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const GlobalErrorHandle = ctx.GlobalErrorHandle as (id: string, error: string | null) => void;
   const GlobalRefs = (ctx.GlobalRefs as ((el: HTMLElement | undefined) => void) | undefined) ?? undefined;
 
-  const AllDisabledFields = ctx.AllDisabledFields; // could be array or {items:[]}
-  const AllHiddenFields = ctx.AllHiddenFields;     // same
-  const userBasedPerms = ctx.userBasedPerms;
-  const curUserInfo = ctx.curUserInfo;
-  const listCols = ctx.listCols;
+  // These names mirror the ComboBox example
+  const AllDisabledFields = (ctx as any).AllDisabledFields;
+  const AllHiddenFields = (ctx as any).AllHiddenFields;
+  const userBasedPerms = (ctx as any).userBasedPerms;
+  const curUserInfo = (ctx as any).curUserInfo;
+  const listCols = (ctx as any).listCols;
 
   /* ----- Modes ----- */
   const isDisplayForm = FormMode === 4;
@@ -194,22 +155,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return () => GlobalRefs?.(undefined);
   }, []); // once
 
-  // Log on mount (ref + displayName + initial hidden/disabled)
-  React.useEffect(() => {
-    if (!DEBUG) return;
-    // eslint-disable-next-line no-console
-    console.log('[SingleLineComponent] mount', {
-      id,
-      displayName,
-      refPresent: !!elemRef.current,
-      ref: elemRef.current,
-      isHidden,
-      isDisabled,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // mount only
-
-  // Log whenever isHidden / isDisabled changes
+  // Quick visibility of current ref/flags
   React.useEffect(() => {
     if (!DEBUG) return;
     // eslint-disable-next-line no-console
@@ -223,88 +169,54 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     });
   }, [isHidden, isDisabled, displayName, id]);
 
-  /* ----- Centralized rules: formFieldsSetup (hardened + logs) ----- */
+  /* ----- Centralized rules: align with ComboBox pattern ----- */
   React.useEffect(() => {
-    const propsForSetup: FormFieldsProps = {
-      disabledList: asItems(AllDisabledFields),
-      hiddenList:   asItems(AllHiddenFields),
-      userBasedList:asItems(userBasedPerms),
-      curUserList:  asItems(curUserInfo),
-      curField:     id,
-      formStateData:asItems(FormData),  // some versions expect .items on this too
-      listColumns:  asItems(listCols),
+    const formFieldProps: FormFieldsProps = {
+      disabledList: AllDisabledFields,
+      hiddenList: AllHiddenFields,
+      userBasedList: userBasedPerms,
+      curUserList: curUserInfo,
+      curField: id,
+      formStateData: FormData,
+      listColumns: listCols,
     } as any;
 
     if (DEBUG) {
       // eslint-disable-next-line no-console
-      console.log('[SingleLineComponent] setup input', {
-        id, displayName,
-        disabledList: propsForSetup.disabledList,
-        hiddenList: propsForSetup.hiddenList,
-        userBasedList: propsForSetup.userBasedList,
-        curUserList: propsForSetup.curUserList,
-        formStateData: propsForSetup.formStateData,
-        listColumns: propsForSetup.listColumns,
-      });
+      console.log(`[SingleLineComponent][${id}] formFieldProps`, formFieldProps);
     }
 
-    let appliedFromSetup = false;
-
+    let results: Array<{ isDisabled?: boolean; isHidden?: boolean }> = [];
     try {
-      const raw = typeof formFieldsSetup === 'function' ? formFieldsSetup(propsForSetup) : [];
-      const results = Array.isArray(raw) ? raw : [];
-      if (DEBUG) {
-        // eslint-disable-next-line no-console
-        console.log('[SingleLineComponent] setup results', results);
-      }
-
-      for (const r of results) {
-        if (!r || typeof r !== 'object') continue;
-        if ('isDisabled' in r && r.isDisabled !== undefined) {
-          const v = !!(r as any).isDisabled;
-          appliedFromSetup = true;
-          setIsDisabled(v);
-          setDefaultDisable(v);
-          if (DEBUG) console.log(`[SingleLineComponent] applied isDisabled=${v} from formFieldsSetup for ${id}`);
-        }
-        if ('isHidden' in r && r.isHidden !== undefined) {
-          appliedFromSetup = true;
-          setIsHidden(!!(r as any).isHidden);
-          if (DEBUG) console.log(`[SingleLineComponent] applied isHidden=${(r as any).isHidden} from formFieldsSetup for ${id}`);
-        }
-      }
+      results = (formFieldsSetup(formFieldProps) as any) || [];
+      if (!Array.isArray(results)) results = [];
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn('formFieldsSetup failed for field', id, err);
+      console.warn(`[SingleLineComponent][${id}] formFieldsSetup threw`, err);
+      results = [];
     }
 
-    // Fallback: if setup didn’t explicitly return rules, derive from static lists.
-    if (!appliedFromSetup) {
-      const derivedDisable = listHasName(AllDisabledFields, id, displayName);
-      const derivedHidden  = listHasName(AllHiddenFields, id, displayName);
+    if (DEBUG) {
+      // eslint-disable-next-line no-console
+      console.log(`[SingleLineComponent][${id}] formFieldsSetup results`, results);
+    }
 
-      if (DEBUG) {
-        // eslint-disable-next-line no-console
-        console.log('[SingleLineComponent] fallback list check', {
-          id, displayName,
-          derivedDisable, derivedHidden,
-          disabledList: AllDisabledFields,
-          hiddenList: AllHiddenFields,
-        });
-      }
-
-      if (derivedDisable) {
-        setIsDisabled(true);
-        setDefaultDisable(true);
-        if (DEBUG) console.log(`[SingleLineComponent] fallback applied isDisabled=true for ${id}`);
-      }
-      if (derivedHidden) {
-        setIsHidden(true);
-        if (DEBUG) console.log(`[SingleLineComponent] fallback applied isHidden=true for ${id}`);
+    if (results.length > 0) {
+      for (let i = 0; i < results.length; i++) {
+        if (results[i].isDisabled !== undefined) {
+          setIsDisabled(!!results[i].isDisabled);
+          setDefaultDisable(!!results[i].isDisabled);
+        }
+        if (results[i].isHidden !== undefined) {
+          setIsHidden(!!results[i].isHidden);
+        }
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [AllDisabledFields, AllHiddenFields, userBasedPerms, curUserInfo, id, FormData, listCols]);
+    // NOTE: We intentionally do NOT add all objects as deps here to avoid
+    // re-running this setup effect on every tiny context mutation.
+    // If you need it to react to changes, add the specific pieces you expect to change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, AllDisabledFields, AllHiddenFields, userBasedPerms, curUserInfo, FormData, listCols]);
 
   /* ----- Number helpers ----- */
   const allowNegative = (isDefined(min) && min < 0) || (isDefined(max) && max < 0);
