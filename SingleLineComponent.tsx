@@ -27,7 +27,6 @@ import { Field, Input, Text } from '@fluentui/react-components';
 import { DynamicFormContext } from './DynamicFormContext';
 import { formFieldsSetup, FormFieldsProps } from '../Utils/formFieldBased';
 
-/* Toggle to silence/enable logs quickly */
 const DEBUG = true;
 
 /* ───────────────────────────── Props ──────────────────────────── */
@@ -103,11 +102,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   /* ----- Context (match ComboBox naming; provide fallbacks) ----- */
   const ctx = React.useContext(DynamicFormContext) as Record<string, unknown>;
 
-  if (DEBUG) {
-    // eslint-disable-next-line no-console
-    console.log('[SingleLineComponent] context keys:', Object.keys(ctx || {}));
-  }
-
   const {
     FormData,
     GlobalFormData,
@@ -115,9 +109,9 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     GlobalErrorHandle,
     GlobalRefs,
 
-    // ComboBox screenshot shows "AllDisableFields" (no 'd' after Disable)
-    AllDisableFields,   // primary per ComboBox
-    AllDisabledFields,  // alternate spelling used elsewhere
+    // ComboBox uses "AllDisableFields" (no trailing 'd')
+    AllDisableFields,
+    AllDisabledFields,
 
     AllHiddenFields,
     userBasedPerms,
@@ -125,17 +119,22 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     listCols,
   } = (ctx as any) ?? {};
 
-  // Normalize to one name the rest of the file can rely on
+  // Normalize names the rest of the component uses
   const AllDisabledFieldsNorm = (AllDisableFields ?? AllDisabledFields) as unknown;
   const AllHiddenFieldsNorm = AllHiddenFields as unknown;
 
-  if (DEBUG) {
+  // Mount-only debug of context keys
+  React.useEffect(() => {
+    if (!DEBUG) return;
+    // eslint-disable-next-line no-console
+    console.log('[SingleLineComponent] context keys:', Object.keys(ctx || {}));
     // eslint-disable-next-line no-console
     console.log('[SingleLineComponent] disabled list presence', {
       hasAllDisableFields: AllDisableFields !== undefined,
       hasAllDisabledFields: AllDisabledFields !== undefined,
     });
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* ----- Modes ----- */
   const isDisplayForm = (FormMode as number | undefined) === 4;
@@ -143,21 +142,32 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const isFile = type === 'file';
 
   /* ----- Disabled/Hidden baseline (overridable) ----- */
-  const baseDisabled = isDisplayForm; // original baseline rule
+  const baseDisabled = isDisplayForm;
   const baseHidden = false;
 
   const [defaultDisable, setDefaultDisable] = React.useState<boolean>(baseDisabled);
-  const [isDisabled, setIsDisabled] = React.useState<boolean>(defaultDisable || !!submitting);
-  const [isHidden, setIsHidden] = React.useState<boolean>(baseHidden);
+  const [isDisabled, _setIsDisabled] = React.useState<boolean>(defaultDisable || !!submitting);
+  const [isHidden, _setIsHidden] = React.useState<boolean>(baseHidden);
 
-  React.useEffect(() => setDefaultDisable(baseDisabled), [baseDisabled]);
-  React.useEffect(() => setIsHidden(baseHidden), [baseHidden]);
+  // Guarded setters to prevent no-op state updates from triggering renders
+  const setDisabledIfChanged = React.useCallback((next: boolean) => {
+    _setIsDisabled(prev => (prev !== next ? next : prev));
+  }, []);
+  const setDefaultDisableIfChanged = React.useCallback((next: boolean) => {
+    setDefaultDisable(prev => (prev !== next ? next : prev));
+  }, []);
+  const setHiddenIfChanged = React.useCallback((next: boolean) => {
+    _setIsHidden(prev => (prev !== next ? next : prev));
+  }, []);
+
+  React.useEffect(() => setDefaultDisableIfChanged(baseDisabled), [baseDisabled, setDefaultDisableIfChanged]);
+  React.useEffect(() => setHiddenIfChanged(baseHidden), [baseHidden, setHiddenIfChanged]);
 
   // Persist disabled across submit cycles if inherently disabled
   React.useEffect(() => {
-    if (defaultDisable === false) setIsDisabled(!!submitting);
-    else setIsDisabled(true);
-  }, [defaultDisable, submitting]);
+    if (defaultDisable === false) setDisabledIfChanged(!!submitting);
+    else setDisabledIfChanged(true);
+  }, [defaultDisable, submitting, setDisabledIfChanged]);
 
   /* ----- Required flag ----- */
   const [isRequired, setIsRequired] = React.useState<boolean>(!!requiredProp);
@@ -175,7 +185,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return () => (GlobalRefs as ((el: HTMLElement | undefined) => void) | undefined)?.(undefined);
   }, [GlobalRefs]);
 
-  // Helpful logs for field state
+  // Log only when the flags actually change (thanks to guarded setters)
   React.useEffect(() => {
     if (!DEBUG) return;
     // eslint-disable-next-line no-console
@@ -189,7 +199,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     });
   }, [isHidden, isDisabled, displayName, id]);
 
-  /* ----- Centralized rules: align with ComboBox pattern ----- */
+  /* ----- Centralized rules: ComboBox pattern; narrow deps to avoid loops ----- */
   React.useEffect(() => {
     const formFieldProps: FormFieldsProps = {
       disabledList: AllDisabledFieldsNorm,
@@ -224,16 +234,18 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     if (results.length > 0) {
       for (let i = 0; i < results.length; i++) {
         if (results[i].isDisabled !== undefined) {
-          setIsDisabled(!!results[i].isDisabled);
-          setDefaultDisable(!!results[i].isDisabled);
+          const v = !!results[i].isDisabled;
+          setDisabledIfChanged(v);
+          setDefaultDisableIfChanged(v);
         }
         if (results[i].isHidden !== undefined) {
-          setIsHidden(!!results[i].isHidden);
+          setHiddenIfChanged(!!results[i].isHidden);
         }
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, AllDisabledFieldsNorm, AllHiddenFieldsNorm, userBasedPerms, curUserInfo, FormData, listCols]);
+    // Keep deps small; add more only if those inputs truly change at runtime.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]); // <— only re-run when this field ID changes
 
   /* ----- Number helpers ----- */
   const allowNegative = (isDefined(min) && min < 0) || (isDefined(max) && max < 0);
@@ -268,7 +280,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       const dot = val.indexOf('.');
       if (dot === -1) return { value: val, trimmed: false };
       const whole = val.slice(0, dot + 1);
-      const frac = val.slice(dot + 1);
+      const frac = val.slice(0).slice(dot + 1);
       if (frac.length <= decimalLimit) return { value: val, trimmed: false };
       return { value: whole + frac.slice(0, decimalLimit), trimmed: true };
     },
@@ -395,6 +407,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     if (!pasteText) return;
 
     const input = e.currentTarget;
+    the:
     const { start, end } = getSelectionRange(input);
     const projected = input.value.slice(0, start) + pasteText + input.value.slice(end);
     const sanitized0 = sanitizeDecimal(projected);
@@ -488,12 +501,12 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       required={isRequired}
       validationMessage={error !== '' ? error : undefined}
       validationState={error !== '' ? 'error' : 'none'}
-      hint={description}  /* v9: use `hint`, not `description` */
+      hint={description}
     >
       <Input
         ref={elemRef}
-        id={id}                 /* use props.id */
-        name={displayName}      /* use displayName for name */
+        id={id}
+        name={displayName}
         className={className}
         placeholder={placeholder}
         value={displayValue}
@@ -501,17 +514,12 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
         onBlur={handleBlur}
         onPaste={isNumber ? handleNumberPaste : handleTextPaste}
         disabled={isDisabled}
-
-        /* TEXT/FILE ONLY */
         maxLength={!isNumber && isDefined(maxLength) ? maxLength : undefined}
-
-        /* NUMBER ONLY */
-        type={isNumber ? 'number' : 'text'}   // FILE renders as text (display-only)
+        type={isNumber ? 'number' : 'text'}
         inputMode={isNumber ? 'decimal' : undefined}
         step="any"
         min={isNumber && isDefined(min) ? min : undefined}
         max={isNumber && isDefined(max) ? max : undefined}
-
         contentAfter={after}
       />
     </Field>
