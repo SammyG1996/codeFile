@@ -3,23 +3,43 @@
  *
  * What this component does
  * ------------------------
- * Reusable single-line input (<Field> + <Input>) that supports:
+ * Reusable single-line input built with Fluent UI v9 (<Field> + <Input>) that supports:
  *  • TEXT (default)
- *  • NUMBER (min/max, decimalPlaces, paste sanitization, optional “%” after input)
- *  • FILE display (shows file base name in the field, extension in contentAfter)
+ *  • NUMBER (min/max, decimalPlaces, paste sanitization, optional “%” suffix via contentAfter)
+ *  • FILE display (shows file base name in the field, and renders the extension in contentAfter)
  *
- * Integrates with DynamicFormContext to:
- *  • Prefill from FormData / FormMode
- *  • Commit on blur (and on submit if focused)
- *  • Report validation via GlobalErrorHandle
- *  • Expose a ref via GlobalRefs
- *  • Apply centralized rules via formFieldsSetup (aligned with ComboBox pattern)
+ * Integration points
+ * ------------------
+ * Works with a DynamicFormContext to:
+ *  • Prefill from FormData / FormMode (New vs Edit)
+ *  • Commit values to GlobalFormData on blur (and again during submit if focused)
+ *  • Send validation messages to GlobalErrorHandle
+ *  • Expose the input DOM node to GlobalRefs so other code can focus/scroll/etc.
+ *  • Apply centralized form rules (disabled/hidden) via formFieldsSetup (matches ComboBox usage)
  *
- * Example
- * -------
+ * Example usage
+ * -------------
+ * // TEXT (default)
  * <SingleLineComponent id="title" displayName="Title" maxLength={120} isRequired />
- * <SingleLineComponent id="discount" displayName="Discount" type="number" min={0} max={100} decimalPlaces="two" contentAfter="percentage" />
- * <SingleLineComponent id="docName" displayName="Document Name" type="file" starterValue="Proposal_v3.docx" />
+ *
+ * // NUMBER
+ * <SingleLineComponent
+ *   id="discount"
+ *   displayName="Discount"
+ *   type="number"
+ *   min={0}
+ *   max={100}
+ *   decimalPlaces="two"
+ *   contentAfter="percentage"
+ * />
+ *
+ * // FILE (display-only filename where extension is shown after the field)
+ * <SingleLineComponent
+ *   id="docName"
+ *   displayName="Document Name"
+ *   type="file"
+ *   starterValue="Proposal_v3.docx"
+ * />
  */
 
 import * as React from 'react';
@@ -27,39 +47,55 @@ import { Field, Input, Text } from '@fluentui/react-components';
 import { DynamicFormContext } from './DynamicFormContext';
 import { formFieldsSetup, FormFieldsProps } from '../Utils/formFieldBased';
 
-const DEBUG = true;
-
 /* ───────────────────────────── Props ──────────────────────────── */
+/** Public props accepted by the component. */
 export interface SingleLineFieldProps {
+  /** Unique identifier used for committing to GlobalFormData and for the input id attribute. */
   id: string;
+  /** Human-friendly label shown above the field and used as the input name. */
   displayName: string;
 
+  /** Initial value for new items (FormMode === 8). */
   starterValue?: string | number;
+  /** Whether the field is required (simple non-empty check for text/file; number must parse). */
   isRequired?: boolean;
 
-  // TEXT / FILE
+  /** Maximum length for TEXT/FILE input (enforced on paste and validated on blur/submit). */
   maxLength?: number;
 
-  // Type selector (TEXT is default)
+  /** Field rendering type. Defaults to 'text' if omitted. */
   type?: 'text' | 'number' | 'file';
 
-  // NUMBER
+  /** Number-only validation range. */
   min?: number;
   max?: number;
+
+  /** Number-only decimal places policy. */
   decimalPlaces?: 'automatic' | 'one' | 'two';
+
+  /** Number-only contentAfter helper. When 'percentage', a trailing % is rendered. */
   contentAfter?: 'percentage';
 
+  /** Standard appearance props. */
   placeholder?: string;
   className?: string;
   description?: string;
 
+  /**
+   * Form submit flag from parent.
+   * When true, the component validates and commits current value to GlobalFormData.
+   * Also used to disable the input unless the field is inherently disabled by rules.
+   */
   submitting?: boolean;
 }
 
 /* ───────────────────── Helpers & messages ─────────────────────── */
 
+/** User-facing validation messages. */
 const REQUIRED_MSG = 'This is a required field and cannot be blank!';
 const INVALID_NUM_MSG = 'Please enter valid numeric value!';
+
+/** Pretty messages for decimal and range limits. */
 const decimalLimitMsg = (n: 1 | 2) => `Maximum ${n} decimal place${n === 1 ? '' : 's'} allowed.`;
 const rangeMsg = (min?: number, max?: number) =>
   (min !== undefined && max !== undefined)
@@ -70,9 +106,14 @@ const rangeMsg = (min?: number, max?: number) =>
         ? `Value must be ≤ ${max}.`
         : '';
 
+/** Type guard: treat “defined” as anything not strictly undefined. */
 const isDefined = <T,>(v: T | undefined): v is T => v !== undefined;
 
-/** Split filename into base + extension (ext includes dot, e.g. ".docx"). */
+/**
+ * Split a file name into base and extension.
+ * The returned `ext` retains the dot (e.g., ".docx"). If there is no extension,
+ * or the dot is the first/last character (".env", "name."), `ext` is '' and `base` is the original.
+ */
 function splitExt(name: string): { base: string; ext: string } {
   const i = name.lastIndexOf('.');
   if (i <= 0 || i === name.length - 1) return { base: name, ext: '' };
@@ -99,48 +140,45 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     submitting,
   } = props;
 
-  /* ----- Context (match ComboBox naming; provide fallbacks) ----- */
+  /* ── Read the form context. We keep this permissive to avoid tight coupling to provider shape. ── */
   const ctx = React.useContext(DynamicFormContext) as Record<string, unknown>;
-  const {
-    FormData,
-    GlobalFormData,
-    FormMode,
-    GlobalErrorHandle,
-    GlobalRefs,
 
-    // ComboBox provider often exposes this as "AllDisableFields" (no 'd')
+  // Common context values used throughout the app.
+  const {
+    FormData,                 // existing values when editing
+    GlobalFormData,           // callback to write a value: (id, value) => void
+    FormMode,                 // numeric mode (8 = New, 4 = Display, others = Edit)
+    GlobalErrorHandle,        // callback to write an error: (id, message|null) => void
+    GlobalRefs,               // callback to expose a ref: (element|undefined) => void
+
+    // Note: some places provide "AllDisableFields" (without the 'd'), others "AllDisabledFields".
     AllDisableFields,
     AllDisabledFields,
 
-    AllHiddenFields,
-    userBasedPerms,
-    curUserInfo,
-    listCols,
+    AllHiddenFields,          // list of fields hidden by external rules
+    userBasedPerms,           // optional user permissions bag used by formFieldsSetup
+    curUserInfo,              // current user info consumed by formFieldsSetup
+    listCols,                 // list column metadata consumed by formFieldsSetup
   } = (ctx as any) ?? {};
 
-  // Normalize for the rest of the file
+  // Normalize the disabled list key so either spelling works.
   const AllDisabledFieldsNorm = (AllDisableFields ?? AllDisabledFields) as unknown;
   const AllHiddenFieldsNorm = AllHiddenFields as unknown;
 
-  // Mount-only debug of context keys
-  React.useEffect(() => {
-    if (!DEBUG) return;
-    // eslint-disable-next-line no-console
-    console.log('[SingleLineComponent] context keys:', Object.keys(ctx || {}));
-    // eslint-disable-next-line no-console
-    console.log('[SingleLineComponent] disabled list presence', {
-      hasAllDisableFields: AllDisableFields !== undefined,
-      hasAllDisabledFields: AllDisabledFields !== undefined,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  /* ----- Modes ----- */
+  /* ── Type flags ── */
   const isDisplayForm = (FormMode as number | undefined) === 4;
   const isNumber = type === 'number';
   const isFile = type === 'file';
 
-  /* ----- Disabled/Hidden baseline (overridable) ----- */
+  /* ── Disabled/hidden state ─────────────────────────────────────────────────────────────
+   * Two sources can affect disabled/hidden:
+   *  1) A baseline from mode (e.g., display mode disables the field).
+   *  2) Centralized rules returned by formFieldsSetup (and its supporting lists).
+   *
+   * We persist "inherent" disablement (defaultDisable) so that while submitting we keep
+   * the field disabled if rules say it should be disabled even after submit finishes.
+   * Guarded setters are used to avoid no-op state updates that would trigger re-renders.
+   * ───────────────────────────────────────────────────────────────────────────────────── */
   const baseDisabled = isDisplayForm;
   const baseHidden = false;
 
@@ -148,7 +186,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const [isDisabled, _setIsDisabled] = React.useState<boolean>(defaultDisable || !!submitting);
   const [isHidden, _setIsHidden] = React.useState<boolean>(baseHidden);
 
-  // Guarded setters prevent no-op updates (which would re-render)
+  /** Guarded setters only update state when the next value is different. */
   const setDisabledIfChanged = React.useCallback((next: boolean) => {
     _setIsDisabled(prev => (prev !== next ? next : prev));
   }, []);
@@ -159,55 +197,49 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     _setIsHidden(prev => (prev !== next ? next : prev));
   }, []);
 
-  // If FormMode flips (e.g., display mode), align the defaults (guarded)
+  /** Align defaults when display/edit mode changes. */
   React.useEffect(() => {
     setDefaultDisableIfChanged(baseDisabled);
   }, [baseDisabled, setDefaultDisableIfChanged]);
 
-  // Hidden baseline rarely changes; if it does, keep it guarded
+  /** Hidden baseline is constant; if it changes, update guarded. */
   React.useEffect(() => {
     setHiddenIfChanged(baseHidden);
   }, [baseHidden, setHiddenIfChanged]);
 
-  // Persist disabled across submit cycles if inherently disabled
+  /**
+   * During submit, all fields are disabled by the parent form. When submit ends,
+   * if this field is inherently disabled (by mode or centralized rules), it should remain disabled.
+   */
   React.useEffect(() => {
     if (defaultDisable === false) setDisabledIfChanged(!!submitting);
     else setDisabledIfChanged(true);
   }, [defaultDisable, submitting, setDisabledIfChanged]);
 
-  /* ----- Required flag ----- */
+  /* ── Required flag mirrors prop (could also be set by rules separately if desired). ── */
   const [isRequired, setIsRequired] = React.useState<boolean>(!!requiredProp);
   React.useEffect(() => setIsRequired(!!requiredProp), [requiredProp]);
 
-  /* ----- Value, error, touched ----- */
-  const [localVal, setLocalVal] = React.useState<string>('');
-  const [error, setError] = React.useState<string>('');
+  /* ── Local value + validation state ── */
+  const [localVal, setLocalVal] = React.useState<string>(''); // actual committed string (full name for file)
+  const [error, setError] = React.useState<string>('');       // current validation message ('' = none)
   const [touched, setTouched] = React.useState<boolean>(false);
 
-  /* ----- Expose DOM node via GlobalRefs ----- */
+  /* ── Expose the input DOM node to the outside via GlobalRefs (mount/unmount only). ── */
   const elemRef = React.useRef<HTMLInputElement>(null);
-
-  // IMPORTANT: Call GlobalRefs ONCE on mount; unstable function refs can cause loops
   React.useEffect(() => {
     (GlobalRefs as ((el: HTMLElement | undefined) => void) | undefined)?.(elemRef.current ?? undefined);
     return () => (GlobalRefs as ((el: HTMLElement | undefined) => void) | undefined)?.(undefined);
+    // Intentionally mount-only: changing GlobalRefs reference shouldn’t cause loops here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // mount-only
+  }, []);
 
-  // Log only when flags actually change
-  React.useEffect(() => {
-    if (!DEBUG) return;
-    // eslint-disable-next-line no-console
-    console.log('[SingleLineComponent] state change', {
-      id,
-      displayName,
-      isHidden,
-      isDisabled,
-      refPresent: !!elemRef.current,
-    });
-  }, [isHidden, isDisabled, displayName, id]);
-
-  /* ----- Centralized rules: call once per field ID (guard updates inside) ----- */
+  /* ── Centralized rules (disabled/hidden), aligned with ComboBox usage ──
+   * We build FormFieldsProps and call formFieldsSetup. If results are returned,
+   * we apply `isDisabled` / `isHidden`. Setters are guarded to prevent loops.
+   * Dependencies are intentionally kept small; add more if those inputs truly
+   * change at runtime for your form.
+   */
   React.useEffect(() => {
     const formFieldProps: FormFieldsProps = {
       disabledList: AllDisabledFieldsNorm,
@@ -219,24 +251,12 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       listColumns: listCols,
     } as any;
 
-    if (DEBUG) {
-      // eslint-disable-next-line no-console
-      console.log(`[SingleLineComponent][${id}] formFieldProps`, formFieldProps);
-    }
-
     let results: Array<{ isDisabled?: boolean; isHidden?: boolean }> = [];
     try {
       results = (formFieldsSetup(formFieldProps) as any) || [];
       if (!Array.isArray(results)) results = [];
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn(`[SingleLineComponent][${id}] formFieldsSetup threw`, err);
+    } catch {
       results = [];
-    }
-
-    if (DEBUG) {
-      // eslint-disable-next-line no-console
-      console.log(`[SingleLineComponent][${id}] formFieldsSetup results`, results);
     }
 
     if (results.length > 0) {
@@ -251,20 +271,22 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
         }
       }
     }
-    // Keep deps tight. If you truly need it reactive to permissions/data,
-    // add specific deps back one by one (the guarded setters will still prevent loops).
+    // Keep deps tight to avoid loops from large, frequently-changing objects.
+    // Add specific deps back if rules must respond to them in real time.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  /* ----- Number helpers ----- */
+  /* ── Number helpers ── */
   const allowNegative = (isDefined(min) && min < 0) || (isDefined(max) && max < 0);
 
+  /** Convert "automatic" | "one" | "two" into an optional 1 or 2 limit for decimals. */
   const decimalLimit: 1 | 2 | undefined = React.useMemo(() => {
     if (decimalPlaces === 'one') return 1;
     if (decimalPlaces === 'two') return 2;
     return undefined; // automatic
   }, [decimalPlaces]);
 
+  /** Keep only digits, at most one leading '-', and at most one '.'. Respect allowNegative. */
   const sanitizeDecimal = React.useCallback((s: string): string => {
     let out = s.replace(/[^0-9.-]/g, '');
     if (!allowNegative) {
@@ -278,11 +300,13 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return out;
   }, [allowNegative]);
 
+  /** Helper to count digits after the decimal. */
   const fractionDigits = (val: string): number => {
     const dot = val.indexOf('.');
     return dot === -1 ? 0 : Math.max(0, val.length - dot - 1);
   };
 
+  /** Trims the fractional part to the configured decimal limit, if set. */
   const applyDecimalLimit = React.useCallback(
     (val: string): { value: string; trimmed: boolean } => {
       if (decimalLimit === undefined) return { value: val, trimmed: false };
@@ -296,7 +320,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     [decimalLimit]
   );
 
-  /* ----- Validation ----- */
+  /* ── Validation helpers ── */
   const validateText = React.useCallback((val: string): string => {
     if (isRequired && val.trim().length === 0) return REQUIRED_MSG;
     return '';
@@ -320,11 +344,15 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return '';
   }, [isRequired, min, max, isNumericString, decimalLimit]);
 
+  /** Choose the correct validator based on field type. */
   const validate = React.useCallback((val: string): string => (
     isNumber ? validateNumber(val) : validateText(val)
   ), [isNumber, validateNumber, validateText]);
 
-  /* ----- Prefill on mount (New vs Edit) ----- */
+  /* ── Prefill initial value on mount ──
+   * For New (FormMode === 8), use starterValue; otherwise read existing value from FormData.
+   * Number values are sanitized/trimmed for decimal rules, text/file pass through.
+   */
   React.useEffect(() => {
     const fromNew = (FormMode as number | undefined) === 8;
     const raw = fromNew
@@ -336,18 +364,20 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     setLocalVal(sanitized);
     setError('');
     setTouched(false);
-
-    if (DEBUG) {
-      // eslint-disable-next-line no-console
-      console.log('[SingleLineComponent] prefill', { id, fromNew, raw, sanitized });
-    }
+    // Mount-only: we don't want to fight user input by re-prefilling later.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // once
+  }, []);
 
-  /* ----- Submit finalize (validate + commit if no blur yet) ----- */
+  /* ── Submit finalize ──
+   * When the parent toggles `submitting` to true, validate current value and commit it.
+   * This ensures the latest value is captured even if the control didn't blur.
+   */
   React.useEffect(() => {
     if (!submitting) return;
+
+    // In FILE mode we validate the base (the user-editable part), not the base+ext pair.
     const valueForValidation = isFile ? splitExt(localVal).base : localVal;
+
     const tooLong = !isNumber && isDefined(maxLength) && valueForValidation.length > (maxLength ?? Infinity);
     const finalError = tooLong ? `Maximum length is ${maxLength} characters.` : validate(valueForValidation);
 
@@ -355,11 +385,9 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     setError(finalError);
     (GlobalErrorHandle as (id: string, e: string | null) => void)?.(id, finalError === '' ? null : finalError);
 
-    if (DEBUG) {
-      // eslint-disable-next-line no-console
-      console.log('[SingleLineComponent] submit finalize', { id, localVal, valueForValidation, finalError });
-    }
-
+    // Commit to GlobalFormData with the correct type:
+    //  • NUMBER: null for empty/invalid, otherwise Number
+    //  • TEXT/FILE: null for empty string, otherwise the string (FILE stores full name base+ext)
     if (isNumber) {
       const t = localVal.trim();
       (GlobalFormData as (id: string, v: unknown) => void)?.(id, t === '' ? null : (Number.isNaN(Number(t)) ? null : Number(t)));
@@ -367,18 +395,22 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       const out = localVal.trim();
       (GlobalFormData as (id: string, v: unknown) => void)?.(id, out === '' ? null : out);
     }
-  }, [submitting]); // when submit toggles
+  }, [submitting, isNumber, isFile, localVal, maxLength, validate, GlobalErrorHandle, GlobalFormData, id]);
 
-  /* ----- Selection helper (for paste logic) ----- */
+  /* ── Selection helper (used by paste logic) ── */
   const getSelectionRange = (el: HTMLInputElement): { start: number; end: number } => {
     const start = el.selectionStart ?? el.value.length;
     const end = el.selectionEnd ?? el.value.length;
     return { start, end };
   };
 
-  /* ----- Paste handlers ----- */
+  /* ── Paste handlers ──
+   * TEXT/FILE: respect maxLength by trimming pasted text when necessary.
+   * NUMBER: enforce sanitize + decimal limit during paste.
+   */
   const handleTextPaste: React.ClipboardEventHandler<HTMLInputElement> = (e): void => {
     if (isNumber || !isDefined(maxLength)) return;
+
     const input = e.currentTarget;
     const pasteText = e.clipboardData.getData('text');
     if (!pasteText) return;
@@ -400,6 +432,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       const nextBase = input.value.slice(0, start) + insert + input.value.slice(end);
 
       if (isFile) {
+        // For FILE mode, localVal stores the full name; recombine base + existing ext.
         const { ext } = splitExt(localVal);
         const nextValue = nextBase === '' ? '' : `${nextBase}${ext}`;
         setLocalVal(nextValue);
@@ -413,6 +446,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   const handleNumberPaste: React.ClipboardEventHandler<HTMLInputElement> = (e): void => {
     if (!isNumber) return;
+
     const pasteText = e.clipboardData.getData('text');
     if (!pasteText) return;
 
@@ -421,6 +455,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     const projected = input.value.slice(0, start) + pasteText + input.value.slice(end);
     const sanitized0 = sanitizeDecimal(projected);
     const { value: limited, trimmed } = applyDecimalLimit(sanitized0);
+
     if (trimmed && decimalLimit !== undefined) {
       e.preventDefault();
       setLocalVal(limited);
@@ -428,7 +463,10 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     }
   };
 
-  /* ----- Change/Blur ----- */
+  /* ── Change/Blur ──
+   * onChange updates local state and (optionally) shows validation while typing after the first blur.
+   * onBlur validates and pushes both error and value to the global form handlers.
+   */
   const handleChange: React.ComponentProps<typeof Input>['onChange'] = (_e, data): void => {
     const raw = data.value ?? '';
 
@@ -465,6 +503,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const handleBlur: React.FocusEventHandler<HTMLInputElement> = (): void => {
     setTouched(true);
 
+    // Validate the user-editable portion (base) for FILE mode.
     const valueForValidation = isFile ? splitExt(localVal).base : localVal;
     const tooLong = !isNumber && isDefined(maxLength) && valueForValidation.length > (maxLength ?? Infinity);
     const finalError = tooLong ? `Maximum length is ${maxLength} characters.` : validate(valueForValidation);
@@ -472,11 +511,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     setError(finalError);
     (GlobalErrorHandle as (id: string, e: string | null) => void)?.(id, finalError === '' ? null : finalError);
 
-    if (DEBUG) {
-      // eslint-disable-next-line no-console
-      console.log('[SingleLineComponent] blur commit', { id, localVal, valueForValidation, finalError });
-    }
-
+    // Commit to global form data after blur (single source of truth for writes while editing).
     if (isNumber) {
       const t = localVal.trim();
       (GlobalFormData as (id: string, v: unknown) => void)?.(id, t === '' ? null : (Number.isNaN(Number(t)) ? null : Number(t)));
@@ -486,7 +521,10 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     }
   };
 
-  /* ----- contentAfter & display value ----- */
+  /* ── contentAfter & display value ──
+   * FILE: show extension outside the input; inside we display only the base name.
+   * NUMBER: show trailing % when contentAfter === 'percentage'.
+   */
   const extForAfter = isFile ? splitExt(localVal).ext : '';
   const after =
     (isFile && extForAfter)
@@ -497,13 +535,12 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   const displayValue = isFile ? splitExt(localVal).base : localVal;
 
-  /* ----- Hidden? ----- */
+  /* ── Hidden fields render nothing. This keeps the DOM clean and avoids tab stops. ── */
   if (isHidden) {
-    if (DEBUG) console.log(`[SingleLineComponent] rendering nothing because hidden: ${id}`);
     return <></>;
   }
 
-  /* ----- Render ----- */
+  /* ── Render ── */
   return (
     <Field
       label={displayName}
@@ -514,8 +551,8 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     >
       <Input
         ref={elemRef}
-        id={id}
-        name={displayName}
+        id={id}                 /* use the id prop so labels/automation can target this field */
+        name={displayName}      /* set a readable name for form serializers and accessibility tooling */
         className={className}
         placeholder={placeholder}
         value={displayValue}
@@ -523,12 +560,18 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
         onBlur={handleBlur}
         onPaste={isNumber ? handleNumberPaste : handleTextPaste}
         disabled={isDisabled}
+
+        /* TEXT/FILE ONLY */
         maxLength={!isNumber && isDefined(maxLength) ? maxLength : undefined}
-        type={isNumber ? 'number' : 'text'}
+
+        /* NUMBER ONLY */
+        type={isNumber ? 'number' : 'text'}   /* FILE renders as 'text' — only the filename base is editable */
         inputMode={isNumber ? 'decimal' : undefined}
         step="any"
         min={isNumber && isDefined(min) ? min : undefined}
         max={isNumber && isDefined(max) ? max : undefined}
+
+        /* Suffix content: file extension or % sign */
         contentAfter={after}
       />
     </Field>
