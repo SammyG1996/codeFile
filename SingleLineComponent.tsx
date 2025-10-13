@@ -1,16 +1,23 @@
 /**
  * SingleLineComponent.tsx
  *
- * What this component is
- * ----------------------
- * A single-line input built with Fluent UI v9 (<Field> + <Input>) that supports:
- *   • TEXT (default)
- *   • NUMBER (type="number")
- *   • FILE display (type="file") → shows the file **base name** inside the input and the **extension** after the field
+ * What this component does
+ * ------------------------
+ * A reusable single-line Fluent UI input (<Field> + <Input>) that supports:
+ *  • TEXT fields (default)
+ *  • NUMBER fields (min/max, decimalPlaces, paste sanitization, optional % after the input)
+ *  • FILE display fields (shows the file base name in the input and the extension in contentAfter)
  *
- * How to use it
+ * Integrates with DynamicFormContext to:
+ *  • Read initial values (FormData / FormMode)
+ *  • Commit values via GlobalFormData (on blur and when submitting)
+ *  • Report validation via GlobalErrorHandle
+ *  • Expose a ref via GlobalRefs
+ *  • Respect centralized rules via formFieldsSetup (disabled/hidden), safely
+ *
+ * Example usage
  * -------------
- * // TEXT (default)
+ * // TEXT
  * <SingleLineComponent
  *   id="title"
  *   displayName="Title"
@@ -18,11 +25,9 @@
  *   isRequired
  *   maxLength={120}
  *   placeholder="Enter title"
- *   description="Short helper text"
- *   submitting={isSubmitting}
  * />
  *
- * // NUMBER (shows % after the field if contentAfter="percentage")
+ * // NUMBER (shows % after the field)
  * <SingleLineComponent
  *   id="discount"
  *   displayName="Discount"
@@ -32,9 +37,6 @@
  *   decimalPlaces="two"
  *   contentAfter="percentage"
  *   starterValue={12.5}
- *   placeholder="e.g. 12.5"
- *   description="0–100, up to 2 decimals"
- *   submitting={isSubmitting}
  * />
  *
  * // FILE display (editable base name; extension shown after the field)
@@ -50,56 +52,46 @@
 import * as React from 'react';
 import { Field, Input, Text } from '@fluentui/react-components';
 import { DynamicFormContext } from './DynamicFormContext';
+import { formFieldsSetup, FormFieldsProps } from '../Utils/formFieldBased';
 
-/* ════════════════════════
+/* ============================================================================
    Props
-   ════════════════════════ */
+   ========================================================================== */
 
 export interface SingleLineFieldProps {
-  /** Unique business identifier for this field (used for data/commits; NOT used directly as DOM id). */
   id: string;
-  /** Human-friendly name for this field. Used for the label and the <Input name>. */
   displayName: string;
 
-  /** Initial value for the field (text/number/file name). */
   starterValue?: string | number;
-  /** Whether the field is required (validation happens on blur). */
   isRequired?: boolean;
 
-  /** Max length for TEXT/FILE (count applies to the input text only; FILE counts base name). */
+  // TEXT/FILE
   maxLength?: number;
 
-  /** Type selector. TEXT is default if omitted. */
+  // Type selector (TEXT is default when omitted)
   type?: 'text' | 'number' | 'file';
 
-  /** Number-only constraints. */
+  // NUMBER
   min?: number;
   max?: number;
-  /** When set to 'percentage' and type==='number', a % is rendered after the field. */
-  contentAfter?: 'percentage';
-  /** Controls decimal precision for number typing/pasting. */
   decimalPlaces?: 'automatic' | 'one' | 'two';
+  contentAfter?: 'percentage';
 
   placeholder?: string;
   className?: string;
-  /** Optional helper text under the input. */
   description?: string;
 
-  /**
-   * While submitting, controls are temporarily disabled.
-   * If the field is inherently disabled by rules, that supersedes submitting (it stays disabled before/during/after submit).
-   */
   submitting?: boolean;
 }
 
-/* ════════════════════════
-   Helper constants & utils
-   ════════════════════════ */
+/* ============================================================================
+   Helper constants & utilities
+   ========================================================================== */
 
 const REQUIRED_MSG = 'This is a required field and cannot be blank!';
 const INVALID_NUM_MSG = 'Please enter valid numeric value!';
-
-const rangeMsg = (min?: number, max?: number): string =>
+const decimalLimitMsg = (n: 1 | 2) => `Maximum ${n} decimal place${n === 1 ? '' : 's'} allowed.`;
+const rangeMsg = (min?: number, max?: number) =>
   (min !== undefined && max !== undefined)
     ? `Value must be between ${min} and ${max}.`
     : (min !== undefined)
@@ -108,60 +100,18 @@ const rangeMsg = (min?: number, max?: number): string =>
         ? `Value must be ≤ ${max}.`
         : '';
 
-const decimalLimitMsg = (n: 1 | 2): string =>
-  `Maximum ${n} decimal place${n === 1 ? '' : 's'} allowed.`;
-
-/** Narrowing helper: treat "defined" as "not undefined". */
 const isDefined = <T,>(v: T | undefined): v is T => v !== undefined;
 
-/** Safe reads from an unknown-shaped context object without using `any`. */
-const hasKey = (obj: Record<string, unknown>, key: string): boolean =>
-  Object.prototype.hasOwnProperty.call(obj, key);
-const getKey = <T,>(obj: Record<string, unknown>, key: string): T =>
-  obj[key] as T;
-
-/** Returns true if any of the provided keys on the object are truthy. */
-const getCtxFlag = (obj: Record<string, unknown>, keys: string[]): boolean => {
-  for (const k of keys) if (hasKey(obj, k)) return !!obj[k];
-  return false;
-};
-
-/** Membership check against array / Set / comma string / object map. */
-const toBool = (v: unknown): boolean => !!v;
-const isListed = (bag: unknown, name: string): boolean => {
-  const needle = name.trim().toLowerCase();
-  if (!bag) return false;
-  if (Array.isArray(bag)) return bag.some(v => String(v).trim().toLowerCase() === needle);
-  if (typeof (bag as { has?: unknown }).has === 'function') {
-    for (const v of (bag as Set<unknown>)) if (String(v).trim().toLowerCase() === needle) return true;
-    return false;
-  }
-  if (typeof bag === 'string') return bag.split(',').map(s => s.trim().toLowerCase()).includes(needle);
-  if (typeof bag === 'object') {
-    for (const [k, v] of Object.entries(bag as Record<string, unknown>)) {
-      if (k.trim().toLowerCase() === needle && toBool(v)) return true;
-    }
-    return false;
-  }
-  return false;
-};
-
-/**
- * Splits a filename into base and extension.
- * - Keeps the dot in the extension (e.g., ".docx")
- * - Returns empty extension for names like "README" and for leading-dot files without a trailing segment (".env" → base: ".env", ext: "")
- */
+/** Split filename into base + extension (ext includes the dot, e.g., ".docx"). */
 function splitExt(name: string): { base: string; ext: string } {
   const i = name.lastIndexOf('.');
-  if (i <= 0 || i === name.length - 1) {
-    return { base: name, ext: '' };
-  }
+  if (i <= 0 || i === name.length - 1) return { base: name, ext: '' };
   return { base: name.slice(0, i), ext: name.slice(i) };
 }
 
-/* ════════════════════════
+/* ============================================================================
    Component
-   ════════════════════════ */
+   ========================================================================== */
 
 export default function SingleLineComponent(props: SingleLineFieldProps): JSX.Element {
   const {
@@ -173,117 +123,120 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     type,
     min,
     max,
-    contentAfter,
     decimalPlaces = 'automatic',
+    contentAfter,
     placeholder,
     className,
     description = '',
     submitting,
   } = props;
 
-  // Pull needed pieces from context. We read keys safely rather than asserting a strict type.
+  /* ----- Context (read safely) ------------------------------------------------ */
   const formCtx = React.useContext(DynamicFormContext);
   const ctx = formCtx as unknown as Record<string, unknown>;
 
-  const FormData = hasKey(ctx, 'FormData') ? getKey<Record<string, unknown>>(ctx, 'FormData') : undefined;
-  const FormMode = hasKey(ctx, 'FormMode') ? getKey<number>(ctx, 'FormMode') : undefined;
+  const FormData = (ctx.FormData as Record<string, unknown> | undefined) ?? undefined;
+  const FormMode = (ctx.FormMode as number | undefined) ?? undefined;
 
-  const GlobalFormData = getKey<(id: string, value: unknown) => void>(ctx, 'GlobalFormData');
-  const GlobalErrorHandle = getKey<(id: string, error: string | null) => void>(ctx, 'GlobalErrorHandle');
+  const GlobalFormData = ctx.GlobalFormData as (id: string, value: unknown) => void;
+  const GlobalErrorHandle = ctx.GlobalErrorHandle as (id: string, error: string | null) => void;
+  const GlobalRefs = (ctx.GlobalRefs as ((el: HTMLElement | undefined) => void) | undefined) ?? undefined;
 
-  // Optional function to expose this input's DOM element to the hosting app.
-  const GlobalRefs = hasKey(ctx, 'GlobalRefs')
-    ? getKey<(el: HTMLElement | undefined) => void>(ctx, 'GlobalRefs')
-    : undefined;
+  const AllDisabledFields = ctx.AllDisabledFields;
+  const AllHiddenFields = ctx.AllHiddenFields;
+  const userBasedPerms = ctx.userBasedPerms;
+  const curUserInfo = ctx.curUserInfo;
+  const listCols = ctx.listCols;
 
-  // Type mode helpers
+  /* ----- Type mode flags ------------------------------------------------------ */
   const isDisplayForm = FormMode === 4;
   const isNumber = type === 'number';
-  const isFile   = type === 'file';
+  const isFile = type === 'file';
 
-  // Context-provided "disabled" & "visibility" rules
-  const disabledFromCtx = getCtxFlag(ctx, ['isDisabled', 'disabled', 'formDisabled', 'Disabled']);
-  const AllDisabledFields = hasKey(ctx, 'AllDisabledFields') ? ctx.AllDisabledFields : undefined;
-  const AllHiddenFields   = hasKey(ctx, 'AllHiddenFields') ? ctx.AllHiddenFields : undefined;
+  /* ----- Disabled/Hidden (baseline) ------------------------------------------ */
+  // Baseline rules — these can be overridden by centralized setup below
+  const baseDisabled = isDisplayForm; // (your original baseline)
+  const baseHidden = false;
 
-  /**
-   * Baseline (rule-based) state:
-   * - baseDisabled: true if the field should be disabled by *rules* (form mode, context flags, lists)
-   * - baseHidden:   true if the field should be hidden by *rules*
-   */
-  const baseDisabled = isDisplayForm || disabledFromCtx || isListed(AllDisabledFields, displayName);
-  const baseHidden   = isListed(AllHiddenFields, displayName);
-
-  /**
-   * Remember whether this field is *inherently disabled* by rules.
-   * This lets "submit-time disabling" *not* override real disabled rules.
-   */
+  // Keep disable/hidden stateful so the setup can override them
   const [defaultDisable, setDefaultDisable] = React.useState<boolean>(baseDisabled);
-  React.useEffect(() => {
-    setDefaultDisable(baseDisabled);
-  }, [baseDisabled]);
-
-  /**
-   * Final `isDisabled` used by the Input.
-   * If inherently disabled, it stays disabled before/during/after submit.
-   * Otherwise, it disables only while submitting.
-   */
   const [isDisabled, setIsDisabled] = React.useState<boolean>(defaultDisable || !!submitting);
+  const [isHidden, setIsHidden] = React.useState<boolean>(baseHidden);
+
+  React.useEffect(() => setDefaultDisable(baseDisabled), [baseDisabled]);
+  React.useEffect(() => setIsHidden(baseHidden), [baseHidden]);
+
+  // Persist disabled through submit cycles: if inherently disabled, always true
   React.useEffect(() => {
-    if (defaultDisable === false) {
-      setIsDisabled(!!submitting);
-    } else {
-      setIsDisabled(true);
-    }
+    if (defaultDisable === false) setIsDisabled(!!submitting);
+    else setIsDisabled(true);
   }, [defaultDisable, submitting]);
 
-  /** Hidden state is derived from rules each render (no internal state needed). */
-  const isHidden = baseHidden;
-
-  /** Required flag can change from props. */
+  /* ----- Required flag -------------------------------------------------------- */
   const [isRequired, setIsRequired] = React.useState<boolean>(!!requiredProp);
   React.useEffect(() => setIsRequired(!!requiredProp), [requiredProp]);
 
-  /** Local value stored as a string for rendering and validation (committed to GlobalFormData on blur). */
+  /* ----- Local Value / Error state ------------------------------------------- */
   const [localVal, setLocalVal] = React.useState<string>('');
-  /** Error text to display under the field (set on blur and as-you-type where it makes sense). */
   const [error, setError] = React.useState<string>('');
-  /** We only push errors to GlobalErrorHandle after the first blur. */
   const [touched, setTouched] = React.useState<boolean>(false);
 
-  /** DOM ref to the actual input element for external access via GlobalRefs. */
+  /* ----- Expose ref to hosting app ------------------------------------------- */
   const elemRef = React.useRef<HTMLInputElement>(null);
-
-  /**
-   * Call GlobalRefs once on mount (and clean up on unmount).
-   * IMPORTANT: Do not depend on GlobalRefs in the deps array; some providers recreate
-   * that function every render, which can cause a loop if we depend on it.
-   */
   React.useEffect(() => {
     GlobalRefs?.(elemRef.current ?? undefined);
-    return () => {
-      GlobalRefs?.(undefined);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => GlobalRefs?.(undefined);
   }, []); // run once
 
-  /* ───────────────────────── number helpers ───────────────────────── */
+  /* ----- Centralized rules: formFieldsSetup (SAFE) ---------------------------- */
+  React.useEffect(() => {
+    // Normalize potentially missing shapes so helper won’t crash
+    const safeListColumns =
+      (listCols && typeof (listCols as any) === 'object' && Array.isArray((listCols as any).items))
+        ? (listCols as any)
+        : ({ items: [] } as any);
 
-  /** Coerce unknown/nullable values to a safe string for the input. */
-  const valueToString = (v: unknown): string =>
-    (v === null || v === undefined) ? '' : String(v);
+    const formFieldProps: FormFieldsProps = {
+      disabledList: (AllDisabledFields ?? []) as unknown,
+      hiddenList: (AllHiddenFields ?? []) as unknown,
+      userBasedList: (userBasedPerms ?? []) as unknown,
+      curUserList: (curUserInfo ?? []) as unknown,
+      curField: id,
+      formStateData: (FormData ?? {}) as any,
+      listColumns: safeListColumns,
+    } as any;
 
-  // Determine if negative numbers are allowed by the range constraints
+    try {
+      const raw = typeof formFieldsSetup === 'function' ? formFieldsSetup(formFieldProps) : [];
+      const results = Array.isArray(raw) ? raw : [];
+
+      for (const r of results) {
+        if (!r || typeof r !== 'object') continue;
+        if ('isDisabled' in r && r.isDisabled !== undefined) {
+          const v = !!(r as any).isDisabled;
+          setIsDisabled(v);
+          setDefaultDisable(v);
+        }
+        if ('isHidden' in r && r.isHidden !== undefined) {
+          setIsHidden(!!(r as any).isHidden);
+        }
+      }
+    } catch (err) {
+      // Don’t let centralized setup crash the field.
+      // eslint-disable-next-line no-console
+      console.warn('formFieldsSetup failed for field', id, err);
+    }
+  }, [AllDisabledFields, AllHiddenFields, userBasedPerms, curUserInfo, id, FormData, listCols]);
+
+  /* ----- Number helpers ------------------------------------------------------- */
   const allowNegative = (isDefined(min) && min < 0) || (isDefined(max) && max < 0);
 
-  // Decimal precision control for typing/pasting
   const decimalLimit: 1 | 2 | undefined = React.useMemo(() => {
     if (decimalPlaces === 'one') return 1;
     if (decimalPlaces === 'two') return 2;
-    return undefined; // automatic (no enforced limit)
+    return undefined; // automatic
   }, [decimalPlaces]);
 
-  /** Remove illegal characters, normalize multiple '-' and '.', and honor negativity rules. */
   const sanitizeDecimal = React.useCallback((s: string): string => {
     let out = s.replace(/[^0-9.-]/g, '');
     if (!allowNegative) {
@@ -297,32 +250,25 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return out;
   }, [allowNegative]);
 
-  const lengthMsg = isDefined(maxLength) ? `Maximum length is ${maxLength} characters.` : '';
-
   const fractionDigits = (val: string): number => {
     const dot = val.indexOf('.');
     return dot === -1 ? 0 : Math.max(0, val.length - dot - 1);
   };
 
-  /**
-   * Enforce at most N decimal places (if configured).
-   * Returns the possibly-trimmed value and whether trimming happened.
-   */
   const applyDecimalLimit = React.useCallback(
     (val: string): { value: string; trimmed: boolean } => {
       if (decimalLimit === undefined) return { value: val, trimmed: false };
       const dot = val.indexOf('.');
       if (dot === -1) return { value: val, trimmed: false };
       const whole = val.slice(0, dot + 1);
-      const frac = val.slice(0, dot + 1) ? val.slice(dot + 1) : '';
+      const frac = val.slice(dot + 1);
       if (frac.length <= decimalLimit) return { value: val, trimmed: false };
       return { value: whole + frac.slice(0, decimalLimit), trimmed: true };
     },
     [decimalLimit]
   );
 
-  /* ───────────────────────── validation ───────────────────────── */
-
+  /* ----- Validation helpers --------------------------------------------------- */
   const validateText = React.useCallback((val: string): string => {
     if (isRequired && val.trim().length === 0) return REQUIRED_MSG;
     return '';
@@ -338,65 +284,65 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     if (isRequired && val.trim().length === 0) return REQUIRED_MSG;
     if (val.trim().length === 0) return '';
     if (!isNumericString(val)) return INVALID_NUM_MSG;
-
-    if (decimalLimit !== undefined && fractionDigits(val) > decimalLimit) {
-      return decimalLimitMsg(decimalLimit);
-    }
-
+    if (decimalLimit !== undefined && fractionDigits(val) > decimalLimit) return decimalLimitMsg(decimalLimit);
     const n = Number(val);
     if (Number.isNaN(n)) return INVALID_NUM_MSG;
-
     if (isDefined(min) && n < min) return rangeMsg(min, max);
     if (isDefined(max) && n > max) return rangeMsg(min, max);
     return '';
   }, [isRequired, min, max, isNumericString, decimalLimit]);
 
-  /** Dispatch to the correct validator based on type mode. */
   const validate = React.useCallback((val: string): string => (
     isNumber ? validateNumber(val) : validateText(val)
   ), [isNumber, validateNumber, validateText]);
 
-  /* ───────────────────────── lifecycle: initial value ───────────────────────── */
+  /* ----- Prefill on mount (New vs Edit) -------------------------------------- */
+  React.useEffect(() => {
+    const fromNew = FormMode === 8;
+    const raw = fromNew
+      ? (starterValue ?? '')
+      : (FormData ? (FormData[id] ?? '') : '');
 
-  /**
-   * On mount we prefill the local value from:
-   *   - New Form (FormMode === 8): props.starterValue
-   *   - Edit Form: context.FormData[id]
-   * We do NOT push anything to GlobalFormData here—that only happens on blur.
-   */
-  React.useEffect((): void => {
-    const fromNewMode = FormMode === 8;
-    const raw = fromNewMode
-      ? (starterValue !== undefined ? starterValue : '')
-      : (FormData ? (FormData as Record<string, unknown>)[id] : '');
-
-    const initial = valueToString(raw);
+    const initial = raw === null || raw === undefined ? '' : String(raw);
     const sanitized0 = isNumber ? sanitizeDecimal(initial) : initial;
-    const { value: sanitized, trimmed } = isNumber
-      ? applyDecimalLimit(sanitized0)
-      : { value: sanitized0, trimmed: false };
-
+    const { value: sanitized } = isNumber ? applyDecimalLimit(sanitized0) : { value: sanitized0 };
     setLocalVal(sanitized);
+    setError('');
     setTouched(false);
-    if (trimmed && decimalLimit !== undefined) {
-      // Surface a warning if we had to trim decimals on load.
-      setError(decimalLimitMsg(decimalLimit));
+  }, []); // once
+
+  /* ----- Submit finalize (validate+commit if no blur) ------------------------- */
+  React.useEffect(() => {
+    if (!submitting) return;
+    const valueForValidation = isFile ? splitExt(localVal).base : localVal;
+    // Max length check (TEXT/FILE)
+    const tooLong =
+      !isNumber && isDefined(maxLength) && valueForValidation.length > (maxLength ?? Infinity);
+    const finalError = tooLong ? `Maximum length is ${maxLength} characters.` : validate(valueForValidation);
+
+    setTouched(true);
+    setError(finalError);
+    GlobalErrorHandle(id, finalError === '' ? null : finalError);
+
+    // Commit the stored value (numbers as numbers; text/file as trimmed string or null)
+    if (isNumber) {
+      const t = localVal.trim();
+      GlobalFormData(id, t === '' ? null : (Number.isNaN(Number(t)) ? null : Number(t)));
     } else {
-      setError('');
+      const out = localVal.trim();
+      GlobalFormData(id, out === '' ? null : out);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // run once
+  }, [submitting]);
 
-  /* ───────────────────────── handlers ───────────────────────── */
-
-  /** Utility to read current selection; used by paste handlers. */
+  /* ----- Misc input helpers --------------------------------------------------- */
   const getSelectionRange = (el: HTMLInputElement): { start: number; end: number } => {
     const start = el.selectionStart ?? el.value.length;
     const end = el.selectionEnd ?? el.value.length;
     return { start, end };
   };
 
-  /** TEXT/FILE paste: enforce maxLength (TEXT counts raw, FILE counts base name). */
+  /* ----- Paste handlers ------------------------------------------------------- */
+  // TEXT/FILE: respect maxLength (FILE counts base name)
   const handleTextPaste: React.ClipboardEventHandler<HTMLInputElement> = (e): void => {
     if (isNumber || !isDefined(maxLength)) return;
     const input = e.currentTarget;
@@ -410,7 +356,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
     if (spaceLeft <= 0) {
       e.preventDefault();
-      if (touched) setError(lengthMsg);
+      if (touched) setError(`Maximum length is ${maxLength} characters.`);
       return;
     }
 
@@ -420,7 +366,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       const nextBase = input.value.slice(0, start) + insert + input.value.slice(end);
 
       if (isFile) {
-        // In file mode, we store base+ext in localVal, but the input displays only the base.
         const { ext } = splitExt(localVal);
         const nextValue = nextBase === '' ? '' : `${nextBase}${ext}`;
         setLocalVal(nextValue);
@@ -428,11 +373,11 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
         setLocalVal(nextBase);
       }
 
-      if (touched) setError(lengthMsg);
+      if (touched) setError(`Maximum length is ${maxLength} characters.`);
     }
   };
 
-  /** NUMBER paste: sanitize and optionally trim fractional digits. */
+  // NUMBER: sanitize and enforce decimal places
   const handleNumberPaste: React.ClipboardEventHandler<HTMLInputElement> = (e): void => {
     if (!isNumber) return;
     const pasteText = e.clipboardData.getData('text');
@@ -450,7 +395,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     }
   };
 
-  /** onChange keeps local value only; we validate lightly while typing. */
+  /* ----- onChange / onBlur ---------------------------------------------------- */
   const handleChange: React.ComponentProps<typeof Input>['onChange'] = (_e, data): void => {
     const raw = data.value ?? '';
 
@@ -458,16 +403,15 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       const sanitized0 = sanitizeDecimal(raw);
       const { value: next, trimmed } = applyDecimalLimit(sanitized0);
       setLocalVal(next);
-      if (trimmed && decimalLimit !== undefined) {
-        if (touched) setError(decimalLimitMsg(decimalLimit));
-        return;
+      if (touched) {
+        if (trimmed && decimalLimit !== undefined) setError(decimalLimitMsg(decimalLimit));
+        else setError(validateNumber(next));
       }
-      if (touched) setError(validateNumber(next));
       return;
     }
 
     if (isFile) {
-      // User edits only the base name; we preserve the extension in storage.
+      // Input shows base only — keep localVal as base+ext
       const { ext } = splitExt(localVal);
       const recombined = raw === '' ? '' : `${raw}${ext}`;
       setLocalVal(recombined);
@@ -477,34 +421,27 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
     // TEXT
     setLocalVal(raw);
-    // IMPORTANT: equal to maxLength is allowed; only error if strictly greater.
-    if (isDefined(maxLength) && raw.length > maxLength) {
-      if (touched) setError(lengthMsg);
-      return;
+    if (touched) {
+      if (isDefined(maxLength) && raw.length > maxLength) {
+        setError(`Maximum length is ${maxLength} characters.`);
+      } else {
+        setError(validateText(raw));
+      }
     }
-    if (touched) setError(validateText(raw));
   };
 
-  /**
-   * onBlur:
-   *  - mark as touched (so future changes surface validation inline)
-   *  - compute final error (including maxLength)
-   *  - push error to GlobalErrorHandle
-   *  - commit value to GlobalFormData (null for empty)
-   */
   const handleBlur: React.FocusEventHandler<HTMLInputElement> = (): void => {
     setTouched(true);
 
     const valueForValidation = isFile ? splitExt(localVal).base : localVal;
-
-    // IMPORTANT: equal to maxLength is valid; only error if strictly greater.
-    const tooLong = !isNumber && isDefined(maxLength) && valueForValidation.length > (maxLength ?? Infinity);
-    const finalError = tooLong ? lengthMsg : validate(valueForValidation);
+    const tooLong =
+      !isNumber && isDefined(maxLength) && valueForValidation.length > (maxLength ?? Infinity);
+    const finalError = tooLong ? `Maximum length is ${maxLength} characters.` : validate(valueForValidation);
 
     setError(finalError);
     GlobalErrorHandle(id, finalError === '' ? null : finalError);
 
-    // Commit to form data: numbers as numbers, text/file as trimmed string or null
+    // Commit once on blur
     if (isNumber) {
       const t = localVal.trim();
       GlobalFormData(id, t === '' ? null : (Number.isNaN(Number(t)) ? null : Number(t)));
@@ -514,56 +451,53 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     }
   };
 
-  /* ───────────────────────── render ───────────────────────── */
-
-  // Use a DOM-safe, per-instance id to avoid collisions in the page
-  const inputDomId = `${id}__input`;
-
-  // contentAfter: show file extension if in FILE mode; otherwise support % for numbers
+  /* ----- Build contentAfter + display value ---------------------------------- */
   const extForAfter = isFile ? splitExt(localVal).ext : '';
-  const after = (isFile && extForAfter)
-    ? <Text size={400} id={`${inputDomId}Ext`}>{extForAfter}</Text>
-    : (isNumber && contentAfter === 'percentage')
-      ? <Text size={400} id={`${inputDomId}Per`}>%</Text>
-      : undefined;
+  const after =
+    (isFile && extForAfter)
+      ? <Text size={400}>{extForAfter}</Text>
+      : (isNumber && contentAfter === 'percentage')
+        ? <Text size={400} id={`${id}Per`}>%</Text>
+        : undefined;
 
-  // What appears in the input: file base for FILE mode; raw local value otherwise
   const displayValue = isFile ? splitExt(localVal).base : localVal;
 
+  /* ----- Hidden? -------------------------------------------------------------- */
+  if (isHidden) return <></>;
+
+  /* ----- Render --------------------------------------------------------------- */
   return (
-    <div hidden={isHidden} className="fieldClass">
-      <Field
-        label={displayName}
-        required={isRequired}
-        validationMessage={error !== '' ? error : undefined}
-        validationState={error !== '' ? 'error' : undefined}
-      >
-        <Input
-          ref={elemRef}
-          id={inputDomId}     /* DOM id (namespaced to avoid collisions) */
-          name={displayName}  /* business name (as you requested) */
-          className={className}
-          placeholder={placeholder}
-          value={displayValue}
-          onChange={handleChange}
-          onBlur={handleBlur}
-          onPaste={isNumber ? handleNumberPaste : handleTextPaste}
-          disabled={isDisabled}
+    <Field
+      label={displayName}
+      required={isRequired}
+      validationMessage={error !== '' ? error : undefined}
+      validationState={error !== '' ? 'error' : 'none'}
+    >
+      <Input
+        ref={elemRef}
+        id={id}                 /* DOM id = props.id, per requirement */
+        name={displayName}      /* input name uses the display label */
+        className={className}
+        placeholder={placeholder}
+        value={displayValue}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        onPaste={isNumber ? handleNumberPaste : handleTextPaste}
+        disabled={isDisabled}
 
-          /* TEXT/FILE ONLY: enforce length in the browser (TEXT counts raw, FILE counts base) */
-          maxLength={!isNumber && isDefined(maxLength) ? maxLength : undefined}
+        /* TEXT/FILE ONLY: let the browser stop extra typing; paste is handled above */
+        maxLength={!isNumber && isDefined(maxLength) ? maxLength : undefined}
 
-          /* NUMBER ONLY: render numeric input and provide hints for mobile keyboards */
-          type={isNumber ? 'number' : 'text'}  // FILE renders as 'text' because we only display the name, not an actual <input type="file">
-          inputMode={isNumber ? 'decimal' : undefined}
-          step="any"
-          min={isNumber && isDefined(min) ? min : undefined}
-          max={isNumber && isDefined(max) ? max : undefined}
+        /* NUMBER ONLY */
+        type={isNumber ? 'number' : 'text'}   // FILE renders as text; we only display a filename, not <input type="file">
+        inputMode={isNumber ? 'decimal' : undefined}
+        step="any"
+        min={isNumber && isDefined(min) ? min : undefined}
+        max={isNumber && isDefined(max) ? max : undefined}
 
-          contentAfter={after}
-        />
-        {description !== '' && <div className="descriptionText">{description}</div>}
-      </Field>
-    </div>
+        contentAfter={after}
+      />
+      {description !== '' && <div className="descriptionText">{description}</div>}
+    </Field>
   );
 }
