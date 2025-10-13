@@ -194,6 +194,35 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return () => GlobalRefs?.(undefined);
   }, []); // once
 
+  // Log on mount (ref + displayName + initial hidden/disabled)
+  React.useEffect(() => {
+    if (!DEBUG) return;
+    // eslint-disable-next-line no-console
+    console.log('[SingleLineComponent] mount', {
+      id,
+      displayName,
+      refPresent: !!elemRef.current,
+      ref: elemRef.current,
+      isHidden,
+      isDisabled,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // mount only
+
+  // Log whenever isHidden / isDisabled changes
+  React.useEffect(() => {
+    if (!DEBUG) return;
+    // eslint-disable-next-line no-console
+    console.log('[SingleLineComponent] state change', {
+      id,
+      displayName,
+      isHidden,
+      isDisabled,
+      refPresent: !!elemRef.current,
+      ref: elemRef.current,
+    });
+  }, [isHidden, isDisabled, displayName, id]);
+
   /* ----- Centralized rules: formFieldsSetup (hardened + logs) ----- */
   React.useEffect(() => {
     const propsForSetup: FormFieldsProps = {
@@ -437,7 +466,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     if (!pasteText) return;
 
     const input = e.currentTarget;
-    the:
     const { start, end } = getSelectionRange(input);
     const projected = input.value.slice(0, start) + pasteText + input.value.slice(end);
     const sanitized0 = sanitizeDecimal(projected);
