@@ -420,38 +420,34 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   if (isHidden) return <></>;
 
   /* ----- Render ----- */
-  return (
-    <Field
-      label={displayName}
-      required={isRequired}
-      validationMessage={error !== '' ? error : undefined}
-      validationState={error !== '' ? 'error' : 'none'}
-      description={description}
-    >
-      <Input
-        ref={elemRef}
-        id={id}                 /* per requirement: use props.id */
-        name={displayName}      /* per requirement: use displayName */
-        className={className}
-        placeholder={placeholder}
-        value={displayValue}
-        onChange={handleChange}
-        onBlur={handleBlur}
-        onPaste={isNumber ? handleNumberPaste : handleTextPaste}
-        disabled={isDisabled}
+return (
+  <Field
+    label={displayName}
+    required={isRequired}
+    validationMessage={error !== '' ? error : undefined}
+    validationState={error !== '' ? 'error' : 'none'}
+    hint={description}  // ✅ was "description", must be "hint" in Fluent UI v9
+  >
+    <Input
+      ref={elemRef}
+      id={id}
+      name={displayName}
+      className={className}
+      placeholder={placeholder}
+      value={displayValue}
+      onChange={handleChange}
+      onBlur={handleBlur}
+      onPaste={isNumber ? handleNumberPaste : handleTextPaste}
+      disabled={isDisabled}
 
-        /* TEXT/FILE ONLY */
-        maxLength={!isNumber && isDefined(maxLength) ? maxLength : undefined}
-
-        /* NUMBER ONLY */
-        type={isNumber ? 'number' : 'text'}   // FILE renders as text (we only display the name)
-        inputMode={isNumber ? 'decimal' : undefined}
-        step="any"
-        min={isNumber && isDefined(min) ? min : undefined}
-        max={isNumber && isDefined(max) ? max : undefined}
-
-        contentAfter={after}
-      />
-    </Field>
-  );
+      maxLength={!isNumber && isDefined(maxLength) ? maxLength : undefined}
+      type={isNumber ? 'number' : 'text'}
+      inputMode={isNumber ? 'decimal' : undefined}
+      step="any"
+      min={isNumber && isDefined(min) ? min : undefined}
+      max={isNumber && isDefined(max) ? max : undefined}
+      contentAfter={after}
+    />
+  </Field>
+);
 }
