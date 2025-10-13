@@ -101,7 +101,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   /* ----- Context (match ComboBox naming; provide fallbacks) ----- */
   const ctx = React.useContext(DynamicFormContext) as Record<string, unknown>;
-
   const {
     FormData,
     GlobalFormData,
@@ -109,7 +108,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     GlobalErrorHandle,
     GlobalRefs,
 
-    // ComboBox uses "AllDisableFields" (no trailing 'd')
+    // ComboBox provider often exposes this as "AllDisableFields" (no 'd')
     AllDisableFields,
     AllDisabledFields,
 
@@ -119,7 +118,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     listCols,
   } = (ctx as any) ?? {};
 
-  // Normalize names the rest of the component uses
+  // Normalize for the rest of the file
   const AllDisabledFieldsNorm = (AllDisableFields ?? AllDisabledFields) as unknown;
   const AllHiddenFieldsNorm = AllHiddenFields as unknown;
 
@@ -149,7 +148,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const [isDisabled, _setIsDisabled] = React.useState<boolean>(defaultDisable || !!submitting);
   const [isHidden, _setIsHidden] = React.useState<boolean>(baseHidden);
 
-  // Guarded setters to prevent no-op state updates from triggering renders
+  // Guarded setters prevent no-op updates (which would re-render)
   const setDisabledIfChanged = React.useCallback((next: boolean) => {
     _setIsDisabled(prev => (prev !== next ? next : prev));
   }, []);
@@ -160,8 +159,15 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     _setIsHidden(prev => (prev !== next ? next : prev));
   }, []);
 
-  React.useEffect(() => setDefaultDisableIfChanged(baseDisabled), [baseDisabled, setDefaultDisableIfChanged]);
-  React.useEffect(() => setHiddenIfChanged(baseHidden), [baseHidden, setHiddenIfChanged]);
+  // If FormMode flips (e.g., display mode), align the defaults (guarded)
+  React.useEffect(() => {
+    setDefaultDisableIfChanged(baseDisabled);
+  }, [baseDisabled, setDefaultDisableIfChanged]);
+
+  // Hidden baseline rarely changes; if it does, keep it guarded
+  React.useEffect(() => {
+    setHiddenIfChanged(baseHidden);
+  }, [baseHidden, setHiddenIfChanged]);
 
   // Persist disabled across submit cycles if inherently disabled
   React.useEffect(() => {
@@ -180,12 +186,15 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   /* ----- Expose DOM node via GlobalRefs ----- */
   const elemRef = React.useRef<HTMLInputElement>(null);
+
+  // IMPORTANT: Call GlobalRefs ONCE on mount; unstable function refs can cause loops
   React.useEffect(() => {
     (GlobalRefs as ((el: HTMLElement | undefined) => void) | undefined)?.(elemRef.current ?? undefined);
     return () => (GlobalRefs as ((el: HTMLElement | undefined) => void) | undefined)?.(undefined);
-  }, [GlobalRefs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // mount-only
 
-  // Log only when the flags actually change (thanks to guarded setters)
+  // Log only when flags actually change
   React.useEffect(() => {
     if (!DEBUG) return;
     // eslint-disable-next-line no-console
@@ -195,11 +204,10 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       isHidden,
       isDisabled,
       refPresent: !!elemRef.current,
-      ref: elemRef.current,
     });
   }, [isHidden, isDisabled, displayName, id]);
 
-  /* ----- Centralized rules: ComboBox pattern; narrow deps to avoid loops ----- */
+  /* ----- Centralized rules: call once per field ID (guard updates inside) ----- */
   React.useEffect(() => {
     const formFieldProps: FormFieldsProps = {
       disabledList: AllDisabledFieldsNorm,
@@ -243,9 +251,10 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
         }
       }
     }
-    // Keep deps small; add more only if those inputs truly change at runtime.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]); // <— only re-run when this field ID changes
+    // Keep deps tight. If you truly need it reactive to permissions/data,
+    // add specific deps back one by one (the guarded setters will still prevent loops).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   /* ----- Number helpers ----- */
   const allowNegative = (isDefined(min) && min < 0) || (isDefined(max) && max < 0);
@@ -280,7 +289,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       const dot = val.indexOf('.');
       if (dot === -1) return { value: val, trimmed: false };
       const whole = val.slice(0, dot + 1);
-      const frac = val.slice(0).slice(dot + 1);
+      const frac = val.slice(dot + 1);
       if (frac.length <= decimalLimit) return { value: val, trimmed: false };
       return { value: whole + frac.slice(0, decimalLimit), trimmed: true };
     },
@@ -332,6 +341,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       // eslint-disable-next-line no-console
       console.log('[SingleLineComponent] prefill', { id, fromNew, raw, sanitized });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // once
 
   /* ----- Submit finalize (validate + commit if no blur yet) ----- */
@@ -357,7 +367,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       const out = localVal.trim();
       (GlobalFormData as (id: string, v: unknown) => void)?.(id, out === '' ? null : out);
     }
-  }, [submitting]); // re-run when submitting toggles
+  }, [submitting]); // when submit toggles
 
   /* ----- Selection helper (for paste logic) ----- */
   const getSelectionRange = (el: HTMLInputElement): { start: number; end: number } => {
@@ -407,7 +417,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     if (!pasteText) return;
 
     const input = e.currentTarget;
-    the:
     const { start, end } = getSelectionRange(input);
     const projected = input.value.slice(0, start) + pasteText + input.value.slice(end);
     const sanitized0 = sanitizeDecimal(projected);
