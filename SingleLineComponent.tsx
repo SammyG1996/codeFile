@@ -13,7 +13,7 @@
  *  • Commit on blur (and on submit if focused)
  *  • Report validation via GlobalErrorHandle
  *  • Expose a ref via GlobalRefs
- *  • Apply centralized rules via formFieldsSetup (now aligned with ComboBox pattern)
+ *  • Apply centralized rules via formFieldsSetup (aligned with ComboBox pattern)
  *
  * Example
  * -------
@@ -27,7 +27,7 @@ import { Field, Input, Text } from '@fluentui/react-components';
 import { DynamicFormContext } from './DynamicFormContext';
 import { formFieldsSetup, FormFieldsProps } from '../Utils/formFieldBased';
 
-/* ───────────────────────── Debug toggle ───────────────────────── */
+/* Toggle to silence/enable logs quickly */
 const DEBUG = true;
 
 /* ───────────────────────────── Props ──────────────────────────── */
@@ -100,25 +100,45 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     submitting,
   } = props;
 
-  /* ----- Context (loosely typed on purpose) ----- */
-  const formCtx = React.useContext(DynamicFormContext);
-  const ctx = formCtx as unknown as Record<string, unknown>;
+  /* ----- Context (match ComboBox naming; provide fallbacks) ----- */
+  const ctx = React.useContext(DynamicFormContext) as Record<string, unknown>;
 
-  const FormData = (ctx.FormData as Record<string, unknown> | undefined) ?? undefined;
-  const FormMode = (ctx.FormMode as number | undefined) ?? undefined;
-  const GlobalFormData = ctx.GlobalFormData as (id: string, value: unknown) => void;
-  const GlobalErrorHandle = ctx.GlobalErrorHandle as (id: string, error: string | null) => void;
-  const GlobalRefs = (ctx.GlobalRefs as ((el: HTMLElement | undefined) => void) | undefined) ?? undefined;
+  if (DEBUG) {
+    // eslint-disable-next-line no-console
+    console.log('[SingleLineComponent] context keys:', Object.keys(ctx || {}));
+  }
 
-  // These names mirror the ComboBox example
-  const AllDisabledFields = (ctx as any).AllDisabledFields;
-  const AllHiddenFields = (ctx as any).AllHiddenFields;
-  const userBasedPerms = (ctx as any).userBasedPerms;
-  const curUserInfo = (ctx as any).curUserInfo;
-  const listCols = (ctx as any).listCols;
+  const {
+    FormData,
+    GlobalFormData,
+    FormMode,
+    GlobalErrorHandle,
+    GlobalRefs,
+
+    // ComboBox screenshot shows "AllDisableFields" (no 'd' after Disable)
+    AllDisableFields,   // primary per ComboBox
+    AllDisabledFields,  // alternate spelling used elsewhere
+
+    AllHiddenFields,
+    userBasedPerms,
+    curUserInfo,
+    listCols,
+  } = (ctx as any) ?? {};
+
+  // Normalize to one name the rest of the file can rely on
+  const AllDisabledFieldsNorm = (AllDisableFields ?? AllDisabledFields) as unknown;
+  const AllHiddenFieldsNorm = AllHiddenFields as unknown;
+
+  if (DEBUG) {
+    // eslint-disable-next-line no-console
+    console.log('[SingleLineComponent] disabled list presence', {
+      hasAllDisableFields: AllDisableFields !== undefined,
+      hasAllDisabledFields: AllDisabledFields !== undefined,
+    });
+  }
 
   /* ----- Modes ----- */
-  const isDisplayForm = FormMode === 4;
+  const isDisplayForm = (FormMode as number | undefined) === 4;
   const isNumber = type === 'number';
   const isFile = type === 'file';
 
@@ -151,11 +171,11 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   /* ----- Expose DOM node via GlobalRefs ----- */
   const elemRef = React.useRef<HTMLInputElement>(null);
   React.useEffect(() => {
-    GlobalRefs?.(elemRef.current ?? undefined);
-    return () => GlobalRefs?.(undefined);
-  }, []); // once
+    (GlobalRefs as ((el: HTMLElement | undefined) => void) | undefined)?.(elemRef.current ?? undefined);
+    return () => (GlobalRefs as ((el: HTMLElement | undefined) => void) | undefined)?.(undefined);
+  }, [GlobalRefs]);
 
-  // Quick visibility of current ref/flags
+  // Helpful logs for field state
   React.useEffect(() => {
     if (!DEBUG) return;
     // eslint-disable-next-line no-console
@@ -172,8 +192,8 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   /* ----- Centralized rules: align with ComboBox pattern ----- */
   React.useEffect(() => {
     const formFieldProps: FormFieldsProps = {
-      disabledList: AllDisabledFields,
-      hiddenList: AllHiddenFields,
+      disabledList: AllDisabledFieldsNorm,
+      hiddenList: AllHiddenFieldsNorm,
       userBasedList: userBasedPerms,
       curUserList: curUserInfo,
       curField: id,
@@ -212,11 +232,8 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
         }
       }
     }
-    // NOTE: We intentionally do NOT add all objects as deps here to avoid
-    // re-running this setup effect on every tiny context mutation.
-    // If you need it to react to changes, add the specific pieces you expect to change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, AllDisabledFields, AllHiddenFields, userBasedPerms, curUserInfo, FormData, listCols]);
+  }, [id, AllDisabledFieldsNorm, AllHiddenFieldsNorm, userBasedPerms, curUserInfo, FormData, listCols]);
 
   /* ----- Number helpers ----- */
   const allowNegative = (isDefined(min) && min < 0) || (isDefined(max) && max < 0);
@@ -288,13 +305,13 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   /* ----- Prefill on mount (New vs Edit) ----- */
   React.useEffect(() => {
-    const fromNew = FormMode === 8;
+    const fromNew = (FormMode as number | undefined) === 8;
     const raw = fromNew
       ? (starterValue ?? '')
-      : (FormData ? (FormData[id] ?? '') : '');
+      : (FormData ? (FormData as Record<string, unknown>)[id] ?? '' : '');
     const str = raw === null || raw === undefined ? '' : String(raw);
     const sanitized0 = isNumber ? sanitizeDecimal(str) : str;
-    const { value: sanitized } = isNumber ? applyDecimalLimit(sanitized0) : { value: sanitized0 };
+    const { value: sanitized } = isNumber ? applyDecimalLimit(sanitized0) : { value: sanitized0, trimmed: false as any };
     setLocalVal(sanitized);
     setError('');
     setTouched(false);
@@ -314,7 +331,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
     setTouched(true);
     setError(finalError);
-    GlobalErrorHandle(id, finalError === '' ? null : finalError);
+    (GlobalErrorHandle as (id: string, e: string | null) => void)?.(id, finalError === '' ? null : finalError);
 
     if (DEBUG) {
       // eslint-disable-next-line no-console
@@ -323,12 +340,12 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
     if (isNumber) {
       const t = localVal.trim();
-      GlobalFormData(id, t === '' ? null : (Number.isNaN(Number(t)) ? null : Number(t)));
+      (GlobalFormData as (id: string, v: unknown) => void)?.(id, t === '' ? null : (Number.isNaN(Number(t)) ? null : Number(t)));
     } else {
       const out = localVal.trim();
-      GlobalFormData(id, out === '' ? null : out);
+      (GlobalFormData as (id: string, v: unknown) => void)?.(id, out === '' ? null : out);
     }
-  }, [submitting]);
+  }, [submitting]); // re-run when submitting toggles
 
   /* ----- Selection helper (for paste logic) ----- */
   const getSelectionRange = (el: HTMLInputElement): { start: number; end: number } => {
@@ -431,7 +448,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     const finalError = tooLong ? `Maximum length is ${maxLength} characters.` : validate(valueForValidation);
 
     setError(finalError);
-    GlobalErrorHandle(id, finalError === '' ? null : finalError);
+    (GlobalErrorHandle as (id: string, e: string | null) => void)?.(id, finalError === '' ? null : finalError);
 
     if (DEBUG) {
       // eslint-disable-next-line no-console
@@ -440,10 +457,10 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
     if (isNumber) {
       const t = localVal.trim();
-      GlobalFormData(id, t === '' ? null : (Number.isNaN(Number(t)) ? null : Number(t)));
+      (GlobalFormData as (id: string, v: unknown) => void)?.(id, t === '' ? null : (Number.isNaN(Number(t)) ? null : Number(t)));
     } else {
       const out = localVal.trim();
-      GlobalFormData(id, out === '' ? null : out);
+      (GlobalFormData as (id: string, v: unknown) => void)?.(id, out === '' ? null : out);
     }
   };
 
@@ -475,8 +492,8 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     >
       <Input
         ref={elemRef}
-        id={id}                 /* per requirement: use props.id */
-        name={displayName}      /* per requirement: use displayName */
+        id={id}                 /* use props.id */
+        name={displayName}      /* use displayName for name */
         className={className}
         placeholder={placeholder}
         value={displayValue}
@@ -489,7 +506,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
         maxLength={!isNumber && isDefined(maxLength) ? maxLength : undefined}
 
         /* NUMBER ONLY */
-        type={isNumber ? 'number' : 'text'}   // FILE renders as text (we only display the name)
+        type={isNumber ? 'number' : 'text'}   // FILE renders as text (display-only)
         inputMode={isNumber ? 'decimal' : undefined}
         step="any"
         min={isNumber && isDefined(min) ? min : undefined}
