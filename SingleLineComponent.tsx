@@ -45,7 +45,7 @@
 import * as React from 'react';
 import { Field, Input, Text } from '@fluentui/react-components';
 import { DynamicFormContext } from './DynamicFormContext';
-import { formFieldsSetup, FormFieldsProps } from '../Utils/formFieldBased';
+import formFieldsSetup, { FormFieldsProps } from '../Utils/formFieldBased';
 
 /* ───────────────────────────── Props ──────────────────────────── */
 export interface SingleLineFieldProps {
@@ -232,7 +232,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       curField: id,
       formStateData: FormData,
       listColumns: listCols,
-    } as FormFieldsProps;
+    };
 
     let results: RuleResult[] = [];
     try {
