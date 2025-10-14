@@ -12,10 +12,10 @@
  * ------------------
  * Works with a DynamicFormContext to:
  *  • Prefill from FormData / FormMode (New vs Edit)
- *  • Commit values to GlobalFormData on blur (and again during submit if focused)
+ *  • Commit values to GlobalFormData on blur (and also when submitting while focused)
  *  • Send validation messages to GlobalErrorHandle
  *  • Expose the input DOM node to GlobalRefs so other code can focus/scroll/etc.
- *  • Apply centralized form rules (disabled/hidden) via formFieldsSetup (matches ComboBox usage)
+ *  • Apply centralized form rules (disabled/hidden) via formFieldsSetup (same pattern as ComboBox)
  *
  * Example usage
  * -------------
@@ -102,7 +102,7 @@ function splitExt(name: string): { base: string; ext: string } {
 type DisabledHiddenList = unknown;
 
 type GlobalFormDataFn = (id: string, v: unknown) => void;
-type GlobalErrorHandleFn = (id: string, e: string | undefined) => void;
+type GlobalErrorHandleFn = (id: string, e: string | null) => void;
 type GlobalRefsFn = (el: HTMLElement | undefined) => void;
 
 interface ContextShape {
@@ -112,9 +112,8 @@ interface ContextShape {
   GlobalErrorHandle?: GlobalErrorHandleFn;
   GlobalRefs?: GlobalRefsFn;
 
-  AllDisableFields?: DisabledHiddenList;
-  AllDisabledFields?: DisabledHiddenList;
-
+  AllDisableFields?: DisabledHiddenList;   // some providers use this key
+  AllDisabledFields?: DisabledHiddenList;  // others use this key
   AllHiddenFields?: DisabledHiddenList;
 
   userBasedPerms?: unknown;
@@ -144,7 +143,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     submitting,
   } = props;
 
-  /* Read the form context with a safe, typed shape (no `any`). */
+  /* Read the form context safely (no `any`). */
   const ctx = React.useContext(DynamicFormContext) as unknown as ContextShape;
 
   const {
@@ -156,13 +155,13 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
     AllDisableFields,
     AllDisabledFields,
-
     AllHiddenFields,
     userBasedPerms,
     curUserInfo,
     listCols,
   } = ctx ?? {};
 
+  // Normalize optional lists coming from context
   const AllDisabledFieldsNorm: DisabledHiddenList | undefined =
     (AllDisableFields ?? AllDisabledFields) as DisabledHiddenList | undefined;
   const AllHiddenFieldsNorm: DisabledHiddenList | undefined =
@@ -209,7 +208,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   React.useEffect((): void => setIsRequired(!!requiredProp), [requiredProp]);
 
   /* Local value + validation state. */
-  const [localVal, setLocalVal] = React.useState<string>(''); // stores the string the form will submit (full file name for FILE mode)
+  const [localVal, setLocalVal] = React.useState<string>(''); // stores what we’ll commit
   const [error, setError] = React.useState<string>('');       // '' means no error
   const [touched, setTouched] = React.useState<boolean>(false);
 
@@ -226,36 +225,28 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   /* Centralized rules (disabled/hidden), aligned with ComboBox usage. */
   React.useEffect((): void => {
-    // Normalize inputs to exactly what FormFieldsProps expects (no `any` here)
+    // Normalize inputs to what FormFieldsProps expects
     const disabledList = (AllDisabledFieldsNorm ?? {}) as Record<string, unknown>;
     const hiddenList = (AllHiddenFieldsNorm ?? {}) as Record<string, unknown>;
     const userBasedList = (userBasedPerms ?? {}) as Record<string, unknown>;
     const curUserList = (curUserInfo ?? {}) as Record<string, unknown>;
     const listColumns = Array.isArray(listCols) ? (listCols as string[]) : ([] as string[]);
+    // 🔧 Key fix: ensure this is a string[] (your FormFieldsProps requires it)
     const formStateData = Array.isArray(FormData) ? (FormData as string[]) : ([] as string[]);
 
-    // Build with our local types, then cast once to the lib's FormFieldsProps.
-    const formFieldPropsLocal = {
-      disabledList,
-      hiddenList,
-      userBasedList,
-      curUserList,
+    const formFieldProps: FormFieldsProps = {
+      disabledList: disabledList as Record<string, any>,
+      hiddenList: hiddenList as Record<string, any>,
+      userBasedList: userBasedList as Record<string, any>,
+      curUserList: curUserList as Record<string, any>,
       curField: id,
-      formStateData,
-      listColumns,
-    } satisfies {
-      disabledList: Record<string, unknown>;
-      hiddenList: Record<string, unknown>;
-      userBasedList: Record<string, unknown>;
-      curUserList: Record<string, unknown>;
-      curField: string;
-      formStateData: string[];
-      listColumns: string[];
+      formStateData,                 // now string[]
+      listColumns,                   // string[]
     };
 
     let results: RuleResult[] = [];
     try {
-      results = (formFieldsSetup(formFieldPropsLocal as unknown as FormFieldsProps) as RuleResult[] | undefined) ?? [];
+      results = (formFieldsSetup(formFieldProps) as RuleResult[] | undefined) ?? [];
       if (!Array.isArray(results)) results = [];
     } catch {
       results = [];
@@ -377,14 +368,17 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
     setTouched(true);
     setError(finalError);
-    (GlobalErrorHandle as GlobalErrorHandleFn | undefined)?.(id, finalError === '' ? undefined : finalError);
+    // eslint-disable-next-line @rushstack/no-new-null
+    (GlobalErrorHandle as GlobalErrorHandleFn | undefined)?.(id, finalError === '' ? null : finalError);
 
     if (isNumber) {
       const t = localVal.trim();
-      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, t === '' ? undefined : (Number.isNaN(Number(t)) ? undefined : Number(t)));
+      // eslint-disable-next-line @rushstack/no-new-null
+      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, t === '' ? null : (Number.isNaN(Number(t)) ? null : Number(t)));
     } else {
       const out = localVal.trim();
-      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, out === '' ? undefined : out);
+      // eslint-disable-next-line @rushstack/no-new-null
+      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, out === '' ? null : out);
     }
   }, [submitting, isNumber, isFile, localVal, maxLength, validate, GlobalErrorHandle, GlobalFormData, id]);
 
@@ -492,14 +486,17 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     const finalError = tooLong ? `Maximum length is ${maxLength} characters.` : validate(valueForValidation);
 
     setError(finalError);
-    (GlobalErrorHandle as GlobalErrorHandleFn | undefined)?.(id, finalError === '' ? undefined : finalError);
+    // eslint-disable-next-line @rushstack/no-new-null
+    (GlobalErrorHandle as GlobalErrorHandleFn | undefined)?.(id, finalError === '' ? null : finalError);
 
     if (isNumber) {
       const t = localVal.trim();
-      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, t === '' ? undefined : (Number.isNaN(Number(t)) ? undefined : Number(t)));
+      // eslint-disable-next-line @rushstack/no-new-null
+      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, t === '' ? null : (Number.isNaN(Number(t)) ? null : Number(t)));
     } else {
       const out = localVal.trim();
-      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, out === '' ? undefined : out);
+      // eslint-disable-next-line @rushstack/no-new-null
+      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, out === '' ? null : out);
     }
   };
 
