@@ -45,7 +45,7 @@
 import * as React from 'react';
 import { Field, Input, Text } from '@fluentui/react-components';
 import { DynamicFormContext } from './DynamicFormContext';
-import formFieldsSetup, { FormFieldsProps } from '../Utils/formFieldBased';
+import formFieldsSetup, { FormFieldsProps } from '../Utilis/formFieldBased';
 
 /* ───────────────────────────── Props ──────────────────────────── */
 export interface SingleLineFieldProps {
@@ -218,20 +218,24 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   React.useEffect((): void => {
     const fn = GlobalRefs as GlobalRefsFn | undefined;
     fn?.(elemRef.current ?? undefined);
-    return () => fn?.(undefined);
+    // cleanup: always return a function typed as void
+    return (): void => {
+      fn?.(undefined);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* Centralized rules (disabled/hidden), aligned with ComboBox usage. */
   React.useEffect((): void => {
     const formFieldProps: FormFieldsProps = {
-      disabledList: AllDisabledFieldsNorm,
-      hiddenList: AllHiddenFieldsNorm,
-      userBasedList: userBasedPerms,
-      curUserList: curUserInfo,
+      // Cast to the shapes expected by FormFieldsProps
+      disabledList: AllDisabledFieldsNorm as Record<string, any>,
+      hiddenList: AllHiddenFieldsNorm as Record<string, any>,
+      userBasedList: userBasedPerms as Record<string, any>,
+      curUserList: curUserInfo as Record<string, any>,
       curField: id,
-      formStateData: FormData,
-      listColumns: listCols,
+      formStateData: FormData as Record<string, any>,
+      listColumns: listCols as string[],
     };
 
     let results: RuleResult[] = [];
