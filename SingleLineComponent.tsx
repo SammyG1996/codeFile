@@ -106,14 +106,14 @@ type GlobalErrorHandleFn = (id: string, e: string | null) => void;
 type GlobalRefsFn = (el: HTMLElement | undefined) => void;
 
 interface ContextShape {
-  FormData?: Record<string, unknown> | unknown;
+  FormData?: unknown;
   GlobalFormData?: GlobalFormDataFn;
   FormMode?: number;
   GlobalErrorHandle?: GlobalErrorHandleFn;
   GlobalRefs?: GlobalRefsFn;
 
-  AllDisableFields?: DisabledHiddenList;   // some providers use this key
-  AllDisabledFields?: DisabledHiddenList;  // others use this key
+  AllDisableFields?: DisabledHiddenList;
+  AllDisabledFields?: DisabledHiddenList;
 
   AllHiddenFields?: DisabledHiddenList;
 
@@ -215,11 +215,11 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   /* Expose the input DOM node to the outside via GlobalRefs (mount/unmount only). */
   const elemRef = React.useRef<HTMLInputElement>(null);
-  React.useEffect((): void => {
+  React.useEffect((): (() => void) | void => {
     const fn = GlobalRefs as GlobalRefsFn | undefined;
     fn?.(elemRef.current ?? undefined);
-    // cleanup: always return a function typed as void
-    return (): void => {
+    // cleanup
+    return () => {
       fn?.(undefined);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -227,15 +227,22 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   /* Centralized rules (disabled/hidden), aligned with ComboBox usage. */
   React.useEffect((): void => {
+    // Normalize inputs to exactly what FormFieldsProps expects
+    const disabledList = (AllDisabledFieldsNorm ?? {}) as Record<string, any>;
+    const hiddenList = (AllHiddenFieldsNorm ?? {}) as Record<string, any>;
+    const userBasedList = (userBasedPerms ?? {}) as Record<string, any>;
+    const curUserList = (curUserInfo ?? {}) as Record<string, any>;
+    const listColumns = Array.isArray(listCols) ? (listCols as string[]) : ([] as string[]);
+    const formStateData = Array.isArray(FormData) ? (FormData as string[]) : ([] as string[]);
+
     const formFieldProps: FormFieldsProps = {
-      // Cast to the shapes expected by FormFieldsProps
-      disabledList: AllDisabledFieldsNorm as Record<string, any>,
-      hiddenList: AllHiddenFieldsNorm as Record<string, any>,
-      userBasedList: userBasedPerms as Record<string, any>,
-      curUserList: curUserInfo as Record<string, any>,
+      disabledList,
+      hiddenList,
+      userBasedList,
+      curUserList,
       curField: id,
-      formStateData: FormData as Record<string, any>,
-      listColumns: listCols as string[],
+      formStateData,
+      listColumns,
     };
 
     let results: RuleResult[] = [];
@@ -336,7 +343,9 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     const fromNew = (FormMode as number | undefined) === 8;
     const rawUnknown = fromNew
       ? (starterValue ?? '')
-      : (FormData ? (FormData as Record<string, unknown>)[id] ?? '' : '');
+      : (FormData && (FormData as Record<string, unknown>)[id] !== undefined
+          ? (FormData as Record<string, unknown>)[id]
+          : '');
     const str = rawUnknown === null || rawUnknown === undefined ? '' : String(rawUnknown);
     const sanitized0 = isNumber ? sanitizeDecimal(str) : str;
 
