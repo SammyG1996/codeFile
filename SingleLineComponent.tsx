@@ -102,7 +102,7 @@ function splitExt(name: string): { base: string; ext: string } {
 type DisabledHiddenList = unknown;
 
 type GlobalFormDataFn = (id: string, v: unknown) => void;
-type GlobalErrorHandleFn = (id: string, e: string | null) => void;
+type GlobalErrorHandleFn = (id: string, e: string | undefined) => void;
 type GlobalRefsFn = (el: HTMLElement | undefined) => void;
 
 interface ContextShape {
@@ -181,13 +181,13 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   const [isDisabled, _setIsDisabled] = React.useState<boolean>(defaultDisable || !!submitting);
   const [isHidden, _setIsHidden] = React.useState<boolean>(baseHidden);
 
-  const setDisabledIfChanged: (next: boolean) => void = React.useCallback((next: boolean): void => {
+  const setDisabledIfChanged = React.useCallback((next: boolean): void => {
     _setIsDisabled(prev => (prev !== next ? next : prev));
   }, []);
-  const setDefaultDisableIfChanged: (next: boolean) => void = React.useCallback((next: boolean): void => {
+  const setDefaultDisableIfChanged = React.useCallback((next: boolean): void => {
     setDefaultDisable(prev => (prev !== next ? next : prev));
   }, []);
-  const setHiddenIfChanged: (next: boolean) => void = React.useCallback((next: boolean): void => {
+  const setHiddenIfChanged = React.useCallback((next: boolean): void => {
     _setIsHidden(prev => (prev !== next ? next : prev));
   }, []);
 
@@ -218,7 +218,6 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   React.useEffect((): (() => void) | void => {
     const fn = GlobalRefs as GlobalRefsFn | undefined;
     fn?.(elemRef.current ?? undefined);
-    // cleanup
     return () => {
       fn?.(undefined);
     };
@@ -227,15 +226,16 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
   /* Centralized rules (disabled/hidden), aligned with ComboBox usage. */
   React.useEffect((): void => {
-    // Normalize inputs to exactly what FormFieldsProps expects
-    const disabledList = (AllDisabledFieldsNorm ?? {}) as Record<string, any>;
-    const hiddenList = (AllHiddenFieldsNorm ?? {}) as Record<string, any>;
-    const userBasedList = (userBasedPerms ?? {}) as Record<string, any>;
-    const curUserList = (curUserInfo ?? {}) as Record<string, any>;
+    // Normalize inputs to exactly what FormFieldsProps expects (no `any` here)
+    const disabledList = (AllDisabledFieldsNorm ?? {}) as Record<string, unknown>;
+    const hiddenList = (AllHiddenFieldsNorm ?? {}) as Record<string, unknown>;
+    const userBasedList = (userBasedPerms ?? {}) as Record<string, unknown>;
+    const curUserList = (curUserInfo ?? {}) as Record<string, unknown>;
     const listColumns = Array.isArray(listCols) ? (listCols as string[]) : ([] as string[]);
     const formStateData = Array.isArray(FormData) ? (FormData as string[]) : ([] as string[]);
 
-    const formFieldProps: FormFieldsProps = {
+    // Build with our local types, then cast once to the lib's FormFieldsProps.
+    const formFieldPropsLocal = {
       disabledList,
       hiddenList,
       userBasedList,
@@ -243,11 +243,19 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
       curField: id,
       formStateData,
       listColumns,
+    } satisfies {
+      disabledList: Record<string, unknown>;
+      hiddenList: Record<string, unknown>;
+      userBasedList: Record<string, unknown>;
+      curUserList: Record<string, unknown>;
+      curField: string;
+      formStateData: string[];
+      listColumns: string[];
     };
 
     let results: RuleResult[] = [];
     try {
-      results = (formFieldsSetup(formFieldProps) as RuleResult[] | undefined) ?? [];
+      results = (formFieldsSetup(formFieldPropsLocal as unknown as FormFieldsProps) as RuleResult[] | undefined) ?? [];
       if (!Array.isArray(results)) results = [];
     } catch {
       results = [];
@@ -279,7 +287,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return undefined; // automatic
   }, [decimalPlaces]);
 
-  const sanitizeDecimal: (s: string) => string = React.useCallback((s: string): string => {
+  const sanitizeDecimal = React.useCallback((s: string): string => {
     let out = s.replace(/[^0-9.-]/g, '');
     if (!allowNegative) {
       out = out.replace(/-/g, '');
@@ -297,7 +305,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return dot === -1 ? 0 : Math.max(0, val.length - dot - 1);
   };
 
-  const applyDecimalLimit: (val: string) => { value: string; trimmed: boolean } = React.useCallback(
+  const applyDecimalLimit = React.useCallback(
     (val: string): { value: string; trimmed: boolean } => {
       if (decimalLimit === undefined) return { value: val, trimmed: false };
       const dot = val.indexOf('.');
@@ -311,18 +319,18 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
   );
 
   /* Validation helpers */
-  const validateText: (val: string) => string = React.useCallback((val: string): string => {
+  const validateText = React.useCallback((val: string): string => {
     if (isRequired && val.trim().length === 0) return REQUIRED_MSG;
     return '';
   }, [isRequired]);
 
-  const isNumericString: (val: string) => boolean = React.useCallback((val: string): boolean => {
+  const isNumericString = React.useCallback((val: string): boolean => {
     if (!val || val.trim().length === 0) return false;
     const re = allowNegative ? /^-?(?:\d+\.?\d*|\.\d+)$/ : /^(?:\d+\.?\d*|\.\d+)$/;
     return re.test(val);
   }, [allowNegative]);
 
-  const validateNumber: (val: string) => string = React.useCallback((val: string): string => {
+  const validateNumber = React.useCallback((val: string): string => {
     if (isRequired && val.trim().length === 0) return REQUIRED_MSG;
     if (val.trim().length === 0) return '';
     if (!isNumericString(val)) return INVALID_NUM_MSG;
@@ -334,7 +342,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     return '';
   }, [isRequired, min, max, isNumericString, decimalLimit]);
 
-  const validate: (val: string) => string = React.useCallback((val: string): string => (
+  const validate = React.useCallback((val: string): string => (
     isNumber ? validateNumber(val) : validateText(val)
   ), [isNumber, validateNumber, validateText]);
 
@@ -349,7 +357,7 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     const str = rawUnknown === null || rawUnknown === undefined ? '' : String(rawUnknown);
     const sanitized0 = isNumber ? sanitizeDecimal(str) : str;
 
-    const nextObj: { value: string; trimmed: boolean } = isNumber
+    const nextObj = isNumber
       ? applyDecimalLimit(sanitized0)
       : { value: sanitized0, trimmed: false };
 
@@ -369,14 +377,14 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
     setTouched(true);
     setError(finalError);
-    (GlobalErrorHandle as GlobalErrorHandleFn | undefined)?.(id, finalError === '' ? null : finalError);
+    (GlobalErrorHandle as GlobalErrorHandleFn | undefined)?.(id, finalError === '' ? undefined : finalError);
 
     if (isNumber) {
       const t = localVal.trim();
-      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, t === '' ? null : (Number.isNaN(Number(t)) ? null : Number(t)));
+      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, t === '' ? undefined : (Number.isNaN(Number(t)) ? undefined : Number(t)));
     } else {
       const out = localVal.trim();
-      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, out === '' ? null : out);
+      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, out === '' ? undefined : out);
     }
   }, [submitting, isNumber, isFile, localVal, maxLength, validate, GlobalErrorHandle, GlobalFormData, id]);
 
@@ -484,14 +492,14 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     const finalError = tooLong ? `Maximum length is ${maxLength} characters.` : validate(valueForValidation);
 
     setError(finalError);
-    (GlobalErrorHandle as GlobalErrorHandleFn | undefined)?.(id, finalError === '' ? null : finalError);
+    (GlobalErrorHandle as GlobalErrorHandleFn | undefined)?.(id, finalError === '' ? undefined : finalError);
 
     if (isNumber) {
       const t = localVal.trim();
-      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, t === '' ? null : (Number.isNaN(Number(t)) ? null : Number(t)));
+      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, t === '' ? undefined : (Number.isNaN(Number(t)) ? undefined : Number(t)));
     } else {
       const out = localVal.trim();
-      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, out === '' ? null : out);
+      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, out === '' ? undefined : out);
     }
   };
 
