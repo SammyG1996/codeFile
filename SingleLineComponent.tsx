@@ -102,7 +102,7 @@ function splitExt(name: string): { base: string; ext: string } {
 type DisabledHiddenList = unknown;
 
 type GlobalFormDataFn = (id: string, v: unknown) => void;
-type GlobalErrorHandleFn = (id: string, e: string | null) => void;
+type GlobalErrorHandleFn = (id: string, e: string | undefined) => void;
 type GlobalRefsFn = (el: HTMLElement | undefined) => void;
 
 interface ContextShape {
@@ -231,22 +231,22 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     const userBasedList = (userBasedPerms ?? {}) as Record<string, unknown>;
     const curUserList = (curUserInfo ?? {}) as Record<string, unknown>;
     const listColumns = Array.isArray(listCols) ? (listCols as string[]) : ([] as string[]);
-    // 🔧 Key fix: ensure this is a string[] (your FormFieldsProps requires it)
     const formStateData = Array.isArray(FormData) ? (FormData as string[]) : ([] as string[]);
 
-    const formFieldProps: FormFieldsProps = {
-      disabledList: disabledList as Record<string, any>,
-      hiddenList: hiddenList as Record<string, any>,
-      userBasedList: userBasedList as Record<string, any>,
-      curUserList: curUserList as Record<string, any>,
+    // Build locally without `any`, then cast once to FormFieldsProps to satisfy the utility.
+    const formFieldPropsLocal = {
+      disabledList,
+      hiddenList,
+      userBasedList,
+      curUserList,
       curField: id,
-      formStateData,                 // now string[]
-      listColumns,                   // string[]
+      formStateData,
+      listColumns,
     };
 
     let results: RuleResult[] = [];
     try {
-      results = (formFieldsSetup(formFieldProps) as RuleResult[] | undefined) ?? [];
+      results = (formFieldsSetup(formFieldPropsLocal as unknown as FormFieldsProps) as RuleResult[] | undefined) ?? [];
       if (!Array.isArray(results)) results = [];
     } catch {
       results = [];
@@ -368,17 +368,14 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
 
     setTouched(true);
     setError(finalError);
-    // eslint-disable-next-line @rushstack/no-new-null
-    (GlobalErrorHandle as GlobalErrorHandleFn | undefined)?.(id, finalError === '' ? null : finalError);
+    (GlobalErrorHandle as GlobalErrorHandleFn | undefined)?.(id, finalError === '' ? undefined : finalError);
 
     if (isNumber) {
       const t = localVal.trim();
-      // eslint-disable-next-line @rushstack/no-new-null
-      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, t === '' ? null : (Number.isNaN(Number(t)) ? null : Number(t)));
+      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, t === '' ? undefined : (Number.isNaN(Number(t)) ? undefined : Number(t)));
     } else {
       const out = localVal.trim();
-      // eslint-disable-next-line @rushstack/no-new-null
-      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, out === '' ? null : out);
+      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, out === '' ? undefined : out);
     }
   }, [submitting, isNumber, isFile, localVal, maxLength, validate, GlobalErrorHandle, GlobalFormData, id]);
 
@@ -486,17 +483,14 @@ export default function SingleLineComponent(props: SingleLineFieldProps): JSX.El
     const finalError = tooLong ? `Maximum length is ${maxLength} characters.` : validate(valueForValidation);
 
     setError(finalError);
-    // eslint-disable-next-line @rushstack/no-new-null
-    (GlobalErrorHandle as GlobalErrorHandleFn | undefined)?.(id, finalError === '' ? null : finalError);
+    (GlobalErrorHandle as GlobalErrorHandleFn | undefined)?.(id, finalError === '' ? undefined : finalError);
 
     if (isNumber) {
       const t = localVal.trim();
-      // eslint-disable-next-line @rushstack/no-new-null
-      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, t === '' ? null : (Number.isNaN(Number(t)) ? null : Number(t)));
+      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, t === '' ? undefined : (Number.isNaN(Number(t)) ? undefined : Number(t)));
     } else {
       const out = localVal.trim();
-      // eslint-disable-next-line @rushstack/no-new-null
-      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, out === '' ? null : out);
+      (GlobalFormData as GlobalFormDataFn | undefined)?.(id, out === '' ? undefined : out);
     }
   };
 
