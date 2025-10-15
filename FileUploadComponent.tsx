@@ -1,26 +1,22 @@
 /**
  * FileUploadComponent.tsx
  *
- * What it does
- * ------------
- * - NEW mode: lets users pick files, validates them, then saves a SharePoint-ready
- *   payload into the shared form context (GlobalFormData).
- * - EDIT/VIEW mode: lists existing SharePoint attachments and lets the user delete them
- *   immediately (asks for confirmation).
+ * Summary
+ * -------
+ * - NEW mode: lets users pick files, validates them, and writes a SharePoint-ready value
+ *   into GlobalFormData: base64 payload(s) matching { name, content }.
+ * - EDIT/VIEW mode: loads and shows existing SharePoint attachments; allows delete with confirm.
  *
- * What gets saved
- * ---------------
- * - We save base64 content so the submitter can POST directly to
- *   /AttachmentFiles/add(FileName='...')
- *   Shape:
- *     multiple = true  -> Array<{ name: string; content: string /* base64 */ }>
- *     multiple = false -> { name: string; content: string /* base64 */ }
+ * What we save to GlobalFormData
+ * ------------------------------
+ * - multiple = true  -> Array<{ name: string; content: string /* base64 */ }>
+ * - multiple = false -> { name: string; content: string /* base64 */ }
  *
- * Constraints
- * -----------
- * - Combined size of selected files must be <= 250 MB (fixed).
+ * Constraints implemented here
+ * ----------------------------
+ * - Combined size of selected files must be <= 250 MB (hard-coded).
  * - All file types allowed.
- * - Filename rules: letters, digits, SPACE, underscore (_); dots allowed only as ext separators.
+ * - Filename characters allowed: letters, digits, space, underscore; dots allowed as extension separators.
  */
 
 import * as React from 'react';
@@ -31,25 +27,22 @@ import { DynamicFormContext } from './DynamicFormContext';
 import type { FormCustomizerContext } from '@microsoft/sp-listview-extensibility';
 import { getFetchAPI } from '../Utilis/getFetchApi';
 
-/* ----------------------------- Types & helpers ---------------------------- */
+/* --------------------------------- Types --------------------------------- */
 
 export interface FileUploadProps {
   id: string;
   displayName: string;
-
   multiple?: boolean;           // default true
   isRequired?: boolean;
   description?: string;
   className?: string;
   submitting?: boolean;
-
-  // SPFx Form Customizer context (used for loading/deleting existing attachments)
-  context?: FormCustomizerContext;
+  context?: FormCustomizerContext; // SPFx context for reading/deleting attachments
 }
 
 type SPAttachment = { FileName: string; ServerRelativeUrl: string };
 
-// Minimal subset of your DynamicFormContext shape used here.
+// Narrow shape we use from DynamicFormContext
 type FormCtxShape = {
   FormData?: Record<string, unknown>;
   FormMode?: number;
@@ -63,14 +56,13 @@ type FormCtxShape = {
   AllHiddenFields?: unknown;
 };
 
+/* ------------------------------- Constants -------------------------------- */
+
 const REQUIRED_MSG = 'Please select at least one file.';
 const TOTAL_LIMIT_MSG = 'Selected files exceed the 250 MB total size limit.';
-const NAME_INVALID_MSG = (n: string) =>
-  `“${n}” has invalid characters. Use letters, numbers, spaces, underscore (_), and dots only for extensions.`;
-
 const TOTAL_LIMIT_BYTES = 250 * 1024 * 1024; // 250 MB
 
-const isDefined = <T,>(v: T | undefined): v is T => v !== undefined;
+/* ------------------------------- Utilities -------------------------------- */
 
 const getCtxFlag = (o: Record<string, unknown>, keys: string[]): boolean =>
   keys.some((k) => Object.prototype.hasOwnProperty.call(o, k) && Boolean(o[k]));
@@ -96,16 +88,7 @@ const isListed = (bag: unknown, name: string): boolean => {
   return false;
 };
 
-const formatBytes = (bytes: number): string => {
-  if (!Number.isFinite(bytes)) return '';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let i = 0;
-  let n = bytes;
-  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
-  return `${Number.isInteger(n) ? n.toFixed(0) : n.toFixed(2)} ${units[i]}`;
-};
-
-// Attachments hint from FormData (varies by list)
+// SharePoint item indicates attachments present via a few common keys
 const readAttachmentsHint = (fd: Record<string, unknown> | undefined): boolean | undefined => {
   if (!fd) return undefined;
   const keys = ['Attachments', 'attachments', 'AttachmentCount', 'attachmentCount'] as const;
@@ -119,9 +102,18 @@ const readAttachmentsHint = (fd: Record<string, unknown> | undefined): boolean |
   return undefined;
 };
 
-// Filename validation: letters/digits/space/underscore; dots allowed between segments
+// Allow: letters, digits, space, underscore; dots as extension separators
 const validFileName = (name: string): boolean =>
   /^[A-Za-z0-9_ ]+(\.[A-Za-z0-9_ ]+)*$/.test(name);
+
+const formatBytes = (bytes: number): string => {
+  if (!Number.isFinite(bytes)) return '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  let n = bytes;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${Number.isInteger(n) ? n.toFixed(0) : n.toFixed(2)} ${units[i]}`;
+};
 
 /* -------------------------------- Component ------------------------------- */
 
@@ -142,7 +134,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   const FormData = ctx.FormData;
   const FormMode = ctx.FormMode ?? 0;
   const isNewMode = FormMode === 8;       // 8 = New
-  const isDisplayForm = FormMode === 4;   // 4 = Display (read-only)
+  const isDisplayForm = FormMode === 4;   // 4 = Display
 
   const disabledFromCtx = getCtxFlag(ctx as unknown as Record<string, unknown>, [
     'isDisabled', 'disabled', 'formDisabled', 'Disabled',
@@ -156,7 +148,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   );
   const [isHidden, setIsHidden] = React.useState<boolean>(isListed(AllHiddenFields, displayName));
 
-  const [files, setFiles] = React.useState<File[]>([]); // local new selections
+  const [files, setFiles] = React.useState<File[]>([]);
   const [error, setError] = React.useState<string>('');
 
   const [spAttachments, setSpAttachments] = React.useState<SPAttachment[] | undefined>(undefined);
@@ -178,7 +170,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     setIsHidden(fromHiddenList);
   }, [isDisplayForm, disabledFromCtx, AllDisabledFields, AllHiddenFields, displayName, submitting]);
 
-  /* -------------------------- Load existing (Edit/View) ------------------------- */
+  /* ------------------------- Load existing (Edit/View) ------------------------- */
   React.useEffect((): void | (() => void) => {
     if (isNewMode) return;
 
@@ -286,7 +278,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       if (required && list.length === 0) return REQUIRED_MSG;
 
       for (const f of list) {
-        if (!validFileName(f.name)) return NAME_INVALID_MSG(f.name);
+        if (!validFileName(f.name)) return `“${f.name}” has invalid characters. Use letters, numbers, spaces, underscore (_), and dots for extensions.`;
       }
 
       const totalBytes = list.reduce((sum, f) => sum + (f?.size ?? 0), 0);
@@ -297,10 +289,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     [required]
   );
 
-  /**
-   * Convert each File → base64 string and SAVE to shared context.
-   * This is the single write-path for this field into GlobalFormData.
-   */
+  // Convert selected files to base64 and write to shared context.
   const commitWithBase64 = React.useCallback(
     async (list: File[]): Promise<void> => {
       const base64Items = await Promise.all(
@@ -318,11 +307,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           ? base64Items
           : base64Items[0];
 
-      // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-      // SHARED CONTEXT WRITE (consumed by your submitter):
-      //    GlobalFormData(id, payload)
-      // payload is either {name, content} or an array of those.
-      // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
       ctx.GlobalFormData(id, payload);
     },
     [ctx, id, multiple]
@@ -344,9 +328,9 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
 
       if (msg === '') {
-        await commitWithBase64(next);   // <<< write valid selection into GlobalFormData
+        await commitWithBase64(next);
       } else {
-        await commitWithBase64([]);     // <<< clear value if invalid
+        await commitWithBase64([]);
       }
 
       if (inputRef.current) inputRef.current.value = '';
@@ -364,9 +348,9 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
         ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
 
         if (msg === '') {
-          await commitWithBase64(next); // <<< write updated list
+          await commitWithBase64(next);
         } else {
-          await commitWithBase64([]);   // <<< clear value
+          await commitWithBase64([]);
         }
       })();
     },
@@ -381,7 +365,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       setError(msg);
       ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
 
-      await commitWithBase64([]);       // <<< clear value
+      await commitWithBase64([]);
       if (inputRef.current) inputRef.current.value = '';
     })();
   };
@@ -478,7 +462,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
         validationMessage={error || undefined}
         validationState={error ? 'error' : undefined}
       >
-        {/* Existing attachments (Edit/View) */}
+        {/* Existing attachments in Edit/View */}
         {!isNewMode && (
           <div style={{ marginBottom: 8 }}>
             {loadingSP && (
@@ -548,7 +532,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           </div>
         )}
 
-        {/* Hidden input (picker) */}
+        {/* Hidden picker */}
         <input
           id={id}
           name={displayName}
@@ -560,7 +544,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           disabled={isDisabled}
         />
 
-        {/* Action row */}
+        {/* Actions */}
         <div className={className} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <Button appearance="primary" icon={<AttachRegular />} onClick={openPicker} disabled={isDisabled}>
             {files.length === 0
@@ -575,7 +559,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           )}
         </div>
 
-        {/* Local (new) files preview */}
+        {/* New selections */}
         {files.length > 0 && (
           <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
             {files.map((f, i) => (
