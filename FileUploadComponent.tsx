@@ -44,6 +44,7 @@ type FormCtxShape = {
 const REQUIRED_MSG = 'Please select at least one file.';
 const TOTAL_LIMIT_MSG = 'Selected files exceed the 250 MB total size limit.';
 const TOTAL_LIMIT_BYTES = 250 * 1024 * 1024; // 250 MB
+const MAX_NAME_LEN = 150;
 
 /* ------------------------------- Utilities -------------------------------- */
 
@@ -86,9 +87,10 @@ const readAttachmentsHint = (fd: Record<string, unknown> | undefined): boolean |
 };
 
 // Allow: letters, digits, space, underscore; dots as extension separators
-const validFileName = (name: string): boolean =>
-  /^[A-Za-z0-9_ ]+(\.[A-Za-z0-9_ ]+)*$/.test(name);
+const regexAllowedName = /^[A-Za-z0-9_ ]+(\.[A-Za-z0-9_ ]+)*$/;
+const validFileName = (name: string): boolean => regexAllowedName.test(name);
 
+// Pretty bytes
 const formatBytes = (bytes: number): string => {
   if (!Number.isFinite(bytes)) return '';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -101,6 +103,40 @@ const formatBytes = (bytes: number): string => {
 // Explicitly convert a File into a Blob (preserving MIME type)
 function fileToBlob(file: File): Blob {
   return file.slice(0, file.size, file.type || 'application/octet-stream');
+}
+
+// Filter invalid files out; return valid files and a warning message if any skipped
+function filterValidFiles(files: File[]): { valid: File[]; warning: string } {
+  const valid: File[] = [];
+  const badNames: string[] = [];
+  const tooLong: string[] = [];
+
+  for (const f of files) {
+    const name = f.name ?? '';
+    if (name.length > MAX_NAME_LEN) {
+      tooLong.push(name);
+      continue;
+    }
+    if (!validFileName(name)) {
+      badNames.push(name);
+      continue;
+    }
+    valid.push(f);
+  }
+
+  const warnings: string[] = [];
+  if (badNames.length > 0) {
+    warnings.push(
+      `${badNames.length} file${badNames.length > 1 ? 's' : ''} skipped due to invalid characters in the name.`
+    );
+  }
+  if (tooLong.length > 0) {
+    warnings.push(
+      `${tooLong.length} file${tooLong.length > 1 ? 's' : ''} skipped because the name exceeds ${MAX_NAME_LEN} characters.`
+    );
+  }
+
+  return { valid, warning: warnings.join(' ') };
 }
 
 /* -------------------------------- Component ------------------------------- */
@@ -186,17 +222,13 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     if (listGuid) {
       urls.push(
         `${baseUrl}/_api/web/lists(guid'${listGuid}')/items(${idStr})?$select=AttachmentFiles&$expand=AttachmentFiles`,
-        `${baseUrl}/web/lists(guid'${listGuid}')/items(${idStr})?$select=AttachmentFiles&$expand=AttachmentFiles`,
-        `${baseUrl}/_api/web/lists(guid'${listGuid}')/items?$filter=Id eq ${idStr}&$select=AttachmentFiles&$expand=AttachmentFiles`,
-        `${baseUrl}/web/lists(guid'${listGuid}')/items?$filter=Id eq ${idStr}&$select=AttachmentFiles&$expand=AttachmentFiles`
+        `${baseUrl}/web/lists(guid'${listGuid}')/items(${idStr})?$select=AttachmentFiles&$expand=AttachmentFiles`
       );
     }
     if (listTitle) {
       urls.push(
         `${baseUrl}/_api/web/lists/getbytitle('${encTitle}')/items(${idStr})?$select=AttachmentFiles&$expand=AttachmentFiles`,
-        `${baseUrl}/web/lists/getbytitle('${encTitle}')/items(${idStr})?$select=AttachmentFiles&$expand=AttachmentFiles`,
-        `${baseUrl}/_api/web/lists/getbytitle('${encTitle}')/items?$filter=Id eq ${idStr}&$select=AttachmentFiles&$expand=AttachmentFiles`,
-        `${baseUrl}/web/lists/getbytitle('${encTitle}')/items?$filter=Id eq ${idStr}&$select=AttachmentFiles&$expand=AttachmentFiles`
+        `${baseUrl}/web/lists/getbytitle('${encTitle}')/items(${idStr})?$select=AttachmentFiles&$expand=AttachmentFiles`
       );
     }
 
@@ -259,23 +291,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     return (): void => { cancelled = true; };
   }, [isNewMode, FormData, context]);
 
-  /* ------------------------ Validation & committing ------------------------ */
-
-  const validateSelection = React.useCallback(
-    (list: File[]): string => {
-      if (required && list.length === 0) return REQUIRED_MSG;
-
-      for (const f of list) {
-        if (!validFileName(f.name)) return `“${f.name}” has invalid characters. Use letters, numbers, spaces, underscore (_), and dots for extensions.`;
-      }
-
-      const totalBytes = list.reduce((sum, f) => sum + (f?.size ?? 0), 0);
-      if (totalBytes > TOTAL_LIMIT_BYTES) return TOTAL_LIMIT_MSG;
-
-      return '';
-    },
-    [required]
-  );
+  /* ------------------------ Filtering, validation & committing ------------------------ */
 
   // Convert selected files to Blobs and write to shared context.
   const commitWithBlob = React.useCallback(
@@ -304,19 +320,36 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   const onFilesPicked: React.ChangeEventHandler<HTMLInputElement> = (e): void => {
     void (async () => {
       const picked = Array.from(e.currentTarget.files ?? []);
-      const next = multiple ? files.concat(picked) : picked.slice(0, 1);
+      const combined = multiple ? files.concat(picked) : picked.slice(0, 1);
 
-      const msg = validateSelection(next);
+      // 1) Filter out invalid names/lengths
+      const { valid, warning } = filterValidFiles(combined);
 
-      setFiles(next);
-      setError(msg);
-      ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
+      // 2) Validate totals using ONLY the valid files
+      const totalBytes = valid.reduce((sum, f) => sum + (f?.size ?? 0), 0);
 
-      if (msg === '') {
-        await commitWithBlob(next);
-      } else {
-        await commitWithBlob([]);
+      // Size error blocks any change; keep prior committed selection
+      if (totalBytes > TOTAL_LIMIT_BYTES) {
+        setError(TOTAL_LIMIT_MSG);
+        ctx.GlobalErrorHandle(id, TOTAL_LIMIT_MSG);
+        if (inputRef.current) inputRef.current.value = '';
+        return;
       }
+
+      // Required rule (after filtering)
+      const requiredMsg = required && valid.length === 0 ? REQUIRED_MSG : '';
+
+      // Update UI list to valid files only
+      setFiles(valid);
+
+      // Build the visible message: required error takes precedence, else show warnings (if any)
+      const messageToShow = requiredMsg || warning;
+
+      setError(messageToShow);
+      ctx.GlobalErrorHandle(id, messageToShow === '' ? undefined : messageToShow);
+
+      // Commit only the valid files
+      await commitWithBlob(valid);
 
       if (inputRef.current) inputRef.current.value = '';
     })();
@@ -325,8 +358,17 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   const removeAt = React.useCallback(
     (idx: number): void => {
       void (async () => {
+        // Remove by index from current valid selection
         const next = files.filter((_, i) => i !== idx);
-        const msg = validateSelection(next);
+
+        // Re-check required rule
+        const requiredMsg = required && next.length === 0 ? REQUIRED_MSG : '';
+
+        // Re-check total size (should always pass since we're removing)
+        const totalBytes = next.reduce((sum, f) => sum + (f?.size ?? 0), 0);
+        const sizeMsg = totalBytes > TOTAL_LIMIT_BYTES ? TOTAL_LIMIT_MSG : '';
+
+        const msg = requiredMsg || sizeMsg;
 
         setFiles(next);
         setError(msg);
@@ -335,11 +377,11 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
         if (msg === '') {
           await commitWithBlob(next);
         } else {
-          await commitWithBlob([]);
+          await commitWithBlob([]); // keep contract: no commit when failing constraints
         }
       })();
     },
-    [files, validateSelection, ctx, id, commitWithBlob]
+    [files, required, ctx, id, commitWithBlob]
   );
 
   const clearAll = (): void => {
@@ -590,6 +632,21 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
         )}
 
         {description !== '' && <div className="descriptionText" style={{ marginTop: 6 }}>{description}</div>}
+
+        {/* Permanent guidance text under description */}
+        <div
+          style={{
+            marginTop: 6,
+            color: '#D13438', // Fluent red 14-ish; readable and consistent
+            fontSize: '12px',
+            lineHeight: 1.4,
+          }}
+          aria-live="polite"
+        >
+          <div><strong>Filename rules:</strong> Max {MAX_NAME_LEN} characters; letters, numbers, spaces, underscores, and dots only.</div>
+          <div><strong>Size limit:</strong> Combined attachments must not exceed 250&nbsp;MB.</div>
+          <div><strong>Note:</strong> Files with disallowed characters or overly long names will be skipped.</div>
+        </div>
       </Field>
     </div>
   );
