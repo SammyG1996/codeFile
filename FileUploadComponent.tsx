@@ -272,21 +272,18 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     [required]
   );
 
-  // Convert selected files to base64 and write to shared context.
-  const commitWithBase64 = React.useCallback(
+  // Convert selected files to Blob (use the original File object) and write to shared context.
+  const commitWithBlob = React.useCallback(
     async (list: File[]): Promise<void> => {
-      const base64Items = await Promise.all(
-        list.map(async (file) => {
-        return { name: file.name, content: new Blob([file], { type: file.type || 'application/octet-stream' }) };
-        })
-      );
+      // We keep the shape: { name, content } but content is a File (Blob)
+      const blobItems = list.map((file) => ({ name: file.name, content: file as Blob }));
 
       const payload: unknown =
         list.length === 0
           ? undefined
           : multiple
-          ? base64Items
-          : base64Items[0];
+          ? blobItems
+          : blobItems[0];
 
       ctx.GlobalFormData(id, payload);
     },
@@ -309,9 +306,9 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
 
       if (msg === '') {
-        await commitWithBase64(next);
+        await commitWithBlob(next);
       } else {
-        await commitWithBase64([]);
+        await commitWithBlob([]);
       }
 
       if (inputRef.current) inputRef.current.value = '';
@@ -329,13 +326,13 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
         ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
 
         if (msg === '') {
-          await commitWithBase64(next);
+          await commitWithBlob(next);
         } else {
-          await commitWithBase64([]);
+          await commitWithBlob([]);
         }
       })();
     },
-    [files, validateSelection, ctx, id, commitWithBase64]
+    [files, validateSelection, ctx, id, commitWithBlob]
   );
 
   const clearAll = (): void => {
@@ -346,7 +343,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       setError(msg);
       ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
 
-      await commitWithBase64([]);
+      await commitWithBlob([]);
       if (inputRef.current) inputRef.current.value = '';
     })();
   };
