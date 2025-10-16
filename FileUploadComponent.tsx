@@ -1,22 +1,5 @@
 /**
  * FileUploadComponent.tsx
- *
- * Summary
- * -------
- * - NEW mode: lets users pick files, validates them, and writes a SharePoint-ready value
- *   into GlobalFormData: base64 payload(s) matching { name, content }.
- * - EDIT/VIEW mode: loads and shows existing SharePoint attachments; allows delete with confirm.
- *
- * What we save to GlobalFormData
- * ------------------------------
- * - multiple = true  -> Array<{ name: string; content: string /* base64 */ }>
- * - multiple = false -> { name: string; content: string /* base64 */ }
- *
- * Constraints implemented here
- * ----------------------------
- * - Combined size of selected files must be <= 250 MB (hard-coded).
- * - All file types allowed.
- * - Filename characters allowed: letters, digits, space, underscore; dots allowed as extension separators.
  */
 
 import * as React from 'react';
@@ -294,9 +277,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     async (list: File[]): Promise<void> => {
       const base64Items = await Promise.all(
         list.map(async (file) => {
-          const buffer = await file.arrayBuffer();
-          const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-          return { name: file.name, content: base64 };
+        return { name: file.name, content: new Blob([file], { type: file.type || 'application/octet-stream' }) };
         })
       );
 
