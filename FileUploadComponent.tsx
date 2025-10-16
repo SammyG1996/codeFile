@@ -105,7 +105,7 @@ function fileToBlob(file: File): Blob {
   return file.slice(0, file.size, file.type || 'application/octet-stream');
 }
 
-// Filter invalid files out; return valid files and a warning message if any skipped
+// Filter invalid files out; return valid files and a warning message that lists offending filenames
 function filterValidFiles(files: File[]): { valid: File[]; warning: string } {
   const valid: File[] = [];
   const badNames: string[] = [];
@@ -124,19 +124,19 @@ function filterValidFiles(files: File[]): { valid: File[]; warning: string } {
     valid.push(f);
   }
 
-  const warnings: string[] = [];
+  const parts: string[] = [];
   if (badNames.length > 0) {
-    warnings.push(
-      `${badNames.length} file${badNames.length > 1 ? 's' : ''} skipped due to invalid characters in the name.`
+    parts.push(
+      `Skipped invalid filename${badNames.length > 1 ? 's' : ''}: ${badNames.map(n => `"${n}"`).join(', ')}.`
     );
   }
   if (tooLong.length > 0) {
-    warnings.push(
-      `${tooLong.length} file${tooLong.length > 1 ? 's' : ''} skipped because the name exceeds ${MAX_NAME_LEN} characters.`
+    parts.push(
+      `Skipped over-length filename${tooLong.length > 1 ? 's' : ''} (>${MAX_NAME_LEN} chars): ${tooLong.map(n => `"${n}"`).join(', ')}.`
     );
   }
 
-  return { valid, warning: warnings.join(' ') };
+  return { valid, warning: parts.join(' ') };
 }
 
 /* -------------------------------- Component ------------------------------- */
@@ -222,13 +222,17 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     if (listGuid) {
       urls.push(
         `${baseUrl}/_api/web/lists(guid'${listGuid}')/items(${idStr})?$select=AttachmentFiles&$expand=AttachmentFiles`,
-        `${baseUrl}/web/lists(guid'${listGuid}')/items(${idStr})?$select=AttachmentFiles&$expand=AttachmentFiles`
+        `${baseUrl}/web/lists(guid'${listGuid}')/items(${idStr})?$select=AttachmentFiles&$expand=AttachmentFiles`,
+        `${baseUrl}/_api/web/lists(guid'${listGuid}')/items?$filter=Id eq ${idStr}&$select=AttachmentFiles&$expand=AttachmentFiles`,
+        `${baseUrl}/web/lists(guid'${listGuid}')/items?$filter=Id eq ${idStr}&$select=AttachmentFiles&$expand=AttachmentFiles`
       );
     }
     if (listTitle) {
       urls.push(
         `${baseUrl}/_api/web/lists/getbytitle('${encTitle}')/items(${idStr})?$select=AttachmentFiles&$expand=AttachmentFiles`,
-        `${baseUrl}/web/lists/getbytitle('${encTitle}')/items(${idStr})?$select=AttachmentFiles&$expand=AttachmentFiles`
+        `${baseUrl}/web/lists/getbytitle('${encTitle}')/items(${idStr})?$select=AttachmentFiles&$expand=AttachmentFiles`,
+        `${baseUrl}/_api/web/lists/getbytitle('${encTitle}')/items?$filter=Id eq ${idStr}&$select=AttachmentFiles&$expand=AttachmentFiles`,
+        `${baseUrl}/web/lists/getbytitle('${encTitle}')/items?$filter=Id eq ${idStr}&$select=AttachmentFiles&$expand=AttachmentFiles`
       );
     }
 
@@ -322,7 +326,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       const picked = Array.from(e.currentTarget.files ?? []);
       const combined = multiple ? files.concat(picked) : picked.slice(0, 1);
 
-      // 1) Filter out invalid names/lengths
+      // 1) Filter out invalid names/lengths and produce filename-aware warnings
       const { valid, warning } = filterValidFiles(combined);
 
       // 2) Validate totals using ONLY the valid files
@@ -579,7 +583,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
               : multiple ? 'Add more files' : 'Choose different file'}
           </Button>
 
-          {files.length > 0 && (
+        {files.length > 0 && (
             <Button appearance="secondary" onClick={clearAll} icon={<DismissRegular />} disabled={isDisabled}>
               Clear
             </Button>
@@ -631,21 +635,17 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           </div>
         )}
 
-        {description !== '' && <div className="descriptionText" style={{ marginTop: 6 }}>{description}</div>}
+        {description !== '' && (
+          <div className="descriptionText" style={{ marginTop: 6 }}>
+            {description}
+          </div>
+        )}
 
-        {/* Permanent guidance text under description */}
-        <div
-          style={{
-            marginTop: 6,
-            color: '#D13438', // Fluent red 14-ish; readable and consistent
-            fontSize: '12px',
-            lineHeight: 1.4,
-          }}
-          aria-live="polite"
-        >
-          <div><strong>Filename rules:</strong> Max {MAX_NAME_LEN} characters; letters, numbers, spaces, underscores, and dots only.</div>
+        {/* Permanent guidance text under description — same style/color as description */}
+        <div className="descriptionText" style={{ marginTop: 6, lineHeight: 1.4 }}>
+          <div><strong>Filename rules:</strong> Up to {MAX_NAME_LEN} characters; letters, numbers, spaces, underscores, and dots only.</div>
           <div><strong>Size limit:</strong> Combined attachments must not exceed 250&nbsp;MB.</div>
-          <div><strong>Note:</strong> Files with disallowed characters or overly long names will be skipped.</div>
+          <div><strong>Heads-up:</strong> Files with disallowed characters or overly long names will be skipped.</div>
         </div>
       </Field>
     </div>
