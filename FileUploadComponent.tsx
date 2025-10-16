@@ -98,6 +98,11 @@ const formatBytes = (bytes: number): string => {
   return `${Number.isInteger(n) ? n.toFixed(0) : n.toFixed(2)} ${units[i]}`;
 };
 
+// Explicitly convert a File into a Blob (preserving MIME type)
+function fileToBlob(file: File): Blob {
+  return file.slice(0, file.size, file.type || 'application/octet-stream');
+}
+
 /* -------------------------------- Component ------------------------------- */
 
 export default function FileUploadComponent(props: FileUploadProps): JSX.Element {
@@ -272,11 +277,13 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     [required]
   );
 
-  // Convert selected files to Blob (use the original File object) and write to shared context.
+  // Convert selected files to Blobs and write to shared context.
   const commitWithBlob = React.useCallback(
     async (list: File[]): Promise<void> => {
-      // We keep the shape: { name, content } but content is a File (Blob)
-      const blobItems = list.map((file) => ({ name: file.name, content: file as Blob }));
+      const blobItems = list.map((file) => ({
+        name: file.name,
+        content: fileToBlob(file), // explicit Blob conversion
+      }));
 
       const payload: unknown =
         list.length === 0
