@@ -132,7 +132,7 @@ function filterValidFiles(files: File[]): { valid: File[]; warning: string } {
   }
   if (tooLong.length > 0) {
     parts.push(
-      `Skipped over-length filename${tooLong.length > 1 ? 's' : ''} (>${MAX_NAME_LEN} chars): ${tooLong.map(n => `"${n}"`).join(', ')}.`
+      `Skipped over-length filename${tooLong.length > 1 ? 's' : ''} (>${MAX_NAME_LEN} characters): ${tooLong.map(n => `"${n}"`).join(', ')}.`
     );
   }
 
@@ -334,8 +334,8 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
       // Size error blocks any change; keep prior committed selection
       if (totalBytes > TOTAL_LIMIT_BYTES) {
-        setError(TOTAL_LIMIT_MSG);
-        ctx.GlobalErrorHandle(id, TOTAL_LIMIT_MSG);
+        setError(TOTAL_LIMIT_MSG);                 // local only
+        ctx.GlobalErrorHandle(id, undefined);      // do NOT set global error for size
         if (inputRef.current) inputRef.current.value = '';
         return;
       }
@@ -346,11 +346,13 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       // Update UI list to valid files only
       setFiles(valid);
 
-      // Build the visible message: required error takes precedence, else show warnings (if any)
+      // Determine which message to show locally
       const messageToShow = requiredMsg || warning;
 
       setError(messageToShow);
-      ctx.GlobalErrorHandle(id, messageToShow === '' ? undefined : messageToShow);
+
+      // Only propagate the "required" error to global; otherwise clear it
+      ctx.GlobalErrorHandle(id, requiredMsg ? requiredMsg : undefined);
 
       // Commit only the valid files
       await commitWithBlob(valid);
@@ -372,16 +374,20 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
         const totalBytes = next.reduce((sum, f) => sum + (f?.size ?? 0), 0);
         const sizeMsg = totalBytes > TOTAL_LIMIT_BYTES ? TOTAL_LIMIT_MSG : '';
 
+        // Local message priority: required > size (the latter shouldn't happen here)
         const msg = requiredMsg || sizeMsg;
 
         setFiles(next);
         setError(msg);
-        ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
 
-        if (msg === '') {
+        // Only set global for required; otherwise clear it
+        ctx.GlobalErrorHandle(id, requiredMsg ? requiredMsg : undefined);
+
+        if (!msg || requiredMsg === '') {
           await commitWithBlob(next);
-        } else {
-          await commitWithBlob([]); // keep contract: no commit when failing constraints
+        } else if (sizeMsg) {
+          // For size message, keep prior commit; do not overwrite
+          // (No-op commit to preserve previous valid state)
         }
       })();
     },
@@ -390,11 +396,13 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
   const clearAll = (): void => {
     void (async () => {
-      const msg = required ? REQUIRED_MSG : '';
+      const requiredMsg = required ? REQUIRED_MSG : '';
 
       setFiles([]);
-      setError(msg);
-      ctx.GlobalErrorHandle(id, msg === '' ? undefined : msg);
+      setError(requiredMsg);
+
+      // Only set global for required; otherwise clear it
+      ctx.GlobalErrorHandle(id, requiredMsg ? requiredMsg : undefined);
 
       await commitWithBlob([]);
       if (inputRef.current) inputRef.current.value = '';
@@ -583,7 +591,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
               : multiple ? 'Add more files' : 'Choose different file'}
           </Button>
 
-        {files.length > 0 && (
+          {files.length > 0 && (
             <Button appearance="secondary" onClick={clearAll} icon={<DismissRegular />} disabled={isDisabled}>
               Clear
             </Button>
