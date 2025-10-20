@@ -105,14 +105,31 @@ function fileToBlob(file: File): Blob {
   return file.slice(0, file.size, file.type || 'application/octet-stream');
 }
 
-// Filter invalid files out; return valid files and a warning message that lists offending filenames
-function filterValidFiles(files: File[]): { valid: File[]; warning: string } {
-  const valid: File[] = [];
+const normalizeName = (name: string): string => name.trim().toLowerCase();
+
+/**
+ * Filter a batch of newly picked files:
+ * - Skips disallowed characters
+ * - Skips names > MAX_NAME_LEN
+ * - Skips duplicates against:
+ *   a) already-selected files (existingNames)
+ *   b) earlier files in the same picked batch
+ * Returns only the valid/unique files + a single local warning string listing offending filenames.
+ */
+function filterNewFiles(
+  picked: File[],
+  existingNames: Set<string>
+): { validNew: File[]; warning: string } {
+  const seen = new Set(existingNames); // start with existing names
+  const validNew: File[] = [];
   const badNames: string[] = [];
   const tooLong: string[] = [];
+  const duplicates: string[] = [];
 
-  for (const f of files) {
+  for (const f of picked) {
     const name = f.name ?? '';
+    const norm = normalizeName(name);
+
     if (name.length > MAX_NAME_LEN) {
       tooLong.push(name);
       continue;
@@ -121,22 +138,28 @@ function filterValidFiles(files: File[]): { valid: File[]; warning: string } {
       badNames.push(name);
       continue;
     }
-    valid.push(f);
+    if (seen.has(norm)) {
+      duplicates.push(name);
+      continue;
+    }
+
+    // accept and record
+    validNew.push(f);
+    seen.add(norm);
   }
 
   const parts: string[] = [];
   if (badNames.length > 0) {
-    parts.push(
-      `Skipped invalid filename${badNames.length > 1 ? 's' : ''}: ${badNames.map(n => `"${n}"`).join(', ')}.`
-    );
+    parts.push(`Skipped invalid filename${badNames.length > 1 ? 's' : ''}: ${badNames.map(n => `"${n}"`).join(', ')}.`);
   }
   if (tooLong.length > 0) {
-    parts.push(
-      `Skipped over-length filename${tooLong.length > 1 ? 's' : ''} (>${MAX_NAME_LEN} characters): ${tooLong.map(n => `"${n}"`).join(', ')}.`
-    );
+    parts.push(`Skipped over-length filename${tooLong.length > 1 ? 's' : ''} (>${MAX_NAME_LEN} characters): ${tooLong.map(n => `"${n}"`).join(', ')}.`);
+  }
+  if (duplicates.length > 0) {
+    parts.push(`Skipped duplicate filename${duplicates.length > 1 ? 's' : ''}: ${duplicates.map(n => `"${n}"`).join(', ')}.`);
   }
 
-  return { valid, warning: parts.join(' ') };
+  return { validNew, warning: parts.join(' ') };
 }
 
 /* -------------------------------- Component ------------------------------- */
@@ -324,38 +347,43 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   const onFilesPicked: React.ChangeEventHandler<HTMLInputElement> = (e): void => {
     void (async () => {
       const picked = Array.from(e.currentTarget.files ?? []);
-      const combined = multiple ? files.concat(picked) : picked.slice(0, 1);
 
-      // 1) Filter out invalid names/lengths and produce filename-aware warnings
-      const { valid, warning } = filterValidFiles(combined);
+      // Prepare dedupe baseline from current valid selection
+      const existingNames = new Set(files.map(f => normalizeName(f.name)));
 
-      // 2) Validate totals using ONLY the valid files
-      const totalBytes = valid.reduce((sum, f) => sum + (f?.size ?? 0), 0);
+      // Filter only the newly picked files (do not re-validate existing ones)
+      const { validNew, warning } = filterNewFiles(
+        multiple ? picked : picked.slice(0, 1),
+        multiple ? existingNames : new Set<string>() // in single-file mode, always replace
+      );
 
-      // Size error blocks any change; keep prior committed selection
+      // Compute the next set to show/commit
+      const next = multiple ? files.concat(validNew) : validNew.slice(0, 1);
+
+      // Validate combined size using ONLY next (post-filter & post-dedupe)
+      const totalBytes = next.reduce((sum, f) => sum + (f?.size ?? 0), 0);
       if (totalBytes > TOTAL_LIMIT_BYTES) {
-        setError(TOTAL_LIMIT_MSG);                 // local only
-        ctx.GlobalErrorHandle(id, undefined);      // do NOT set global error for size
+        setError(TOTAL_LIMIT_MSG);            // local only
+        ctx.GlobalErrorHandle(id, undefined); // do not set global for size
         if (inputRef.current) inputRef.current.value = '';
         return;
       }
 
-      // Required rule (after filtering)
-      const requiredMsg = required && valid.length === 0 ? REQUIRED_MSG : '';
+      // Required rule after all filtering/dedupe
+      const requiredMsg = required && next.length === 0 ? REQUIRED_MSG : '';
 
-      // Update UI list to valid files only
-      setFiles(valid);
-
-      // Determine which message to show locally
+      // Local message: required takes precedence, else show any warnings (invalid/too-long/duplicates)
       const messageToShow = requiredMsg || warning;
 
+      // Update state
+      setFiles(next);
       setError(messageToShow);
 
-      // Only propagate the "required" error to global; otherwise clear it
+      // Only propagate "required" to global; everything else remains local
       ctx.GlobalErrorHandle(id, requiredMsg ? requiredMsg : undefined);
 
-      // Commit only the valid files
-      await commitWithBlob(valid);
+      // Commit only what passed validation
+      await commitWithBlob(next);
 
       if (inputRef.current) inputRef.current.value = '';
     })();
@@ -364,17 +392,13 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   const removeAt = React.useCallback(
     (idx: number): void => {
       void (async () => {
-        // Remove by index from current valid selection
         const next = files.filter((_, i) => i !== idx);
 
-        // Re-check required rule
         const requiredMsg = required && next.length === 0 ? REQUIRED_MSG : '';
 
-        // Re-check total size (should always pass since we're removing)
         const totalBytes = next.reduce((sum, f) => sum + (f?.size ?? 0), 0);
         const sizeMsg = totalBytes > TOTAL_LIMIT_BYTES ? TOTAL_LIMIT_MSG : '';
 
-        // Local message priority: required > size (the latter shouldn't happen here)
         const msg = requiredMsg || sizeMsg;
 
         setFiles(next);
@@ -385,9 +409,6 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
         if (!msg || requiredMsg === '') {
           await commitWithBlob(next);
-        } else if (sizeMsg) {
-          // For size message, keep prior commit; do not overwrite
-          // (No-op commit to preserve previous valid state)
         }
       })();
     },
@@ -653,7 +674,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
         <div className="descriptionText" style={{ marginTop: 6, lineHeight: 1.4 }}>
           <div><strong>Filename rules:</strong> Up to {MAX_NAME_LEN} characters; letters, numbers, spaces, underscores, and dots only.</div>
           <div><strong>Size limit:</strong> Combined attachments must not exceed 250&nbsp;MB.</div>
-          <div><strong>Heads-up:</strong> Files with disallowed characters or overly long names will be skipped.</div>
+          <div><strong>Heads-up:</strong> Files with disallowed characters, duplicates, or overly long names will be skipped.</div>
         </div>
       </Field>
     </div>
