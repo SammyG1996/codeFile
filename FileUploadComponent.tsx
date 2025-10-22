@@ -344,90 +344,84 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
   const openPicker = (): void => { if (!isDisabled) inputRef.current?.click(); };
 
-  const onFilesPicked: React.ChangeEventHandler<HTMLInputElement> = (e): void => {
-    void (async () => {
-      const picked = Array.from(e.currentTarget.files ?? []);
+  const onFilesPicked: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
+    const picked = Array.from(e.currentTarget.files ?? []);
 
-      // Prepare dedupe baseline from current valid selection
-      const existingNames = new Set(files.map(f => normalizeName(f.name)));
+    // Prepare dedupe baseline from current valid selection
+    const existingNames = new Set(files.map(f => normalizeName(f.name)));
 
-      // Filter only the newly picked files (do not re-validate existing ones)
-      const { validNew, warning } = filterNewFiles(
-        multiple ? picked : picked.slice(0, 1),
-        multiple ? existingNames : new Set<string>() // in single-file mode, always replace
-      );
+    // Filter only the newly picked files (do not re-validate existing ones)
+    const { validNew, warning } = filterNewFiles(
+      multiple ? picked : picked.slice(0, 1),
+      multiple ? existingNames : new Set<string>() // in single-file mode, always replace
+    );
 
-      // Compute the next set to show/commit
-      const next = multiple ? files.concat(validNew) : validNew.slice(0, 1);
+    // Compute the next set to show/commit
+    const next = multiple ? files.concat(validNew) : validNew.slice(0, 1);
 
-      // Validate combined size using ONLY next (post-filter & post-dedupe)
-      const totalBytes = next.reduce((sum, f) => sum + (f?.size ?? 0), 0);
-      if (totalBytes > TOTAL_LIMIT_BYTES) {
-        setError(TOTAL_LIMIT_MSG);            // local only
-        ctx.GlobalErrorHandle(id, undefined); // do not set global for size
-        if (inputRef.current) inputRef.current.value = '';
-        return;
-      }
-
-      // Required rule after all filtering/dedupe
-      const requiredMsg = required && next.length === 0 ? REQUIRED_MSG : '';
-
-      // Local message: required takes precedence, else show any warnings (invalid/too-long/duplicates)
-      const messageToShow = requiredMsg || warning;
-
-      // Update state
-      setFiles(next);
-      setError(messageToShow);
-
-      // Only propagate "required" to global; everything else remains local
-      ctx.GlobalErrorHandle(id, requiredMsg ? requiredMsg : undefined);
-
-      // Commit only what passed validation
-      await commitWithBlob(next);
-
+    // Validate combined size using ONLY next (post-filter & post-dedupe)
+    const totalBytes = next.reduce((sum, f) => sum + (f?.size ?? 0), 0);
+    if (totalBytes > TOTAL_LIMIT_BYTES) {
+      setError(TOTAL_LIMIT_MSG);            // local only
+      ctx.GlobalErrorHandle(id, undefined); // do not set global for size
       if (inputRef.current) inputRef.current.value = '';
-    })();
+      return;
+    }
+
+    // Required rule after all filtering/dedupe
+    const requiredMsg = required && next.length === 0 ? REQUIRED_MSG : '';
+
+    // Local message: required takes precedence, else show any warnings (invalid/too-long/duplicates)
+    const messageToShow = requiredMsg || warning;
+
+    // Update state
+    setFiles(next);
+    setError(messageToShow);
+
+    // Only propagate "required" to global; everything else remains local
+    ctx.GlobalErrorHandle(id, requiredMsg ? requiredMsg : undefined);
+
+    // Commit only what passed validation
+    await commitWithBlob(next);
+
+    if (inputRef.current) inputRef.current.value = '';
   };
 
   const removeAt = React.useCallback(
-    (idx: number): void => {
-      void (async () => {
-        const next = files.filter((_, i) => i !== idx);
+    async (idx: number): Promise<void> => {
+      const next = files.filter((_, i) => i !== idx);
 
-        const requiredMsg = required && next.length === 0 ? REQUIRED_MSG : '';
+      const requiredMsg = required && next.length === 0 ? REQUIRED_MSG : '';
 
-        const totalBytes = next.reduce((sum, f) => sum + (f?.size ?? 0), 0);
-        const sizeMsg = totalBytes > TOTAL_LIMIT_BYTES ? TOTAL_LIMIT_MSG : '';
+      const totalBytes = next.reduce((sum, f) => sum + (f?.size ?? 0), 0);
+      const sizeMsg = totalBytes > TOTAL_LIMIT_BYTES ? TOTAL_LIMIT_MSG : '';
 
-        const msg = requiredMsg || sizeMsg;
+      const msg = requiredMsg || sizeMsg;
 
-        setFiles(next);
-        setError(msg);
-
-        // Only set global for required; otherwise clear it
-        ctx.GlobalErrorHandle(id, requiredMsg ? requiredMsg : undefined);
-
-        if (!msg || requiredMsg === '') {
-          await commitWithBlob(next);
-        }
-      })();
-    },
-    [files, required, ctx, id, commitWithBlob]
-  );
-
-  const clearAll = (): void => {
-    void (async () => {
-      const requiredMsg = required ? REQUIRED_MSG : '';
-
-      setFiles([]);
-      setError(requiredMsg);
+      setFiles(next);
+      setError(msg);
 
       // Only set global for required; otherwise clear it
       ctx.GlobalErrorHandle(id, requiredMsg ? requiredMsg : undefined);
 
-      await commitWithBlob([]);
-      if (inputRef.current) inputRef.current.value = '';
-    })();
+      if (!msg || requiredMsg === '') {
+        await commitWithBlob(next);
+      }
+    },
+    [files, required, ctx, id, commitWithBlob]
+  );
+
+  const clearAll = async (): Promise<void> => {
+    const requiredMsg = required ? REQUIRED_MSG : '';
+
+    setFiles([]);
+    setError(requiredMsg);
+
+    // Only set global for required; otherwise clear it
+    ctx.GlobalErrorHandle(id, requiredMsg ? requiredMsg : undefined);
+
+    await commitWithBlob([]);
+    if (inputRef.current) inputRef.current.value = '';
   };
 
   /* --------------------------- Delete existing file ------------------------ */
@@ -576,7 +570,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                         icon={<DismissRegular />}
                         disabled={busy || isDisabled}
                         aria-label={`Delete ${a.FileName}`}
-                        onClick={(): void => { void deleteExistingAttachment(a.FileName); }}
+                        onClick={() => { deleteExistingAttachment(a.FileName).catch(() => {}); }}
                       >
                         {busy ? 'Deleting…' : 'Delete'}
                       </Button>
@@ -655,7 +649,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                 <Button
                   size="small"
                   icon={<DismissRegular />}
-                  onClick={(): void => removeAt(i)}
+                  onClick={() => { removeAt(i).catch(() => {}); }}
                   disabled={isDisabled}
                   aria-label={`Remove ${f.name}`}
                 />
