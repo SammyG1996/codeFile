@@ -9,8 +9,6 @@ import {
   Option,
   Text,
   Label,
-  type ComboboxOnChangeData,
-  type ComboboxOnOptionSelectData,
 } from '@fluentui/react-components';
 
 export interface RequestTypeSelectorProps {
@@ -55,32 +53,33 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
 
   /**
    * Fired when the user types in the Combobox input.
-   * We use Fluent's ComboboxOnChangeData so there is no implicit `any`.
+   * In this Fluent UI version, onChange is just a normal input
+   * ChangeEventHandler, so we only get the event.
    */
-  const handleChange = (
-    _event: React.ChangeEvent<HTMLInputElement>,
-    data: ComboboxOnChangeData
+  const handleChange: React.ChangeEventHandler<HTMLInputElement> = (
+    event
   ): void => {
-    const next = data.value ?? '';
+    const next = event.target.value ?? '';
     setSelectedType(next);
     if (onChange) onChange(next);
   };
 
   /**
    * Fired when the user picks an option from the dropdown list.
+   * We let React infer the parameter types from the Combobox prop
+   * definition via React.ComponentProps.
    */
-  const handleOptionSelect = (
-    _event: React.SyntheticEvent<Element, Event>,
-    data: ComboboxOnOptionSelectData
-  ): void => {
-    const next =
-      (data.optionValue as string | undefined) ??
-      (data.optionText as string | undefined) ??
-      '';
+  const handleOptionSelect: React.ComponentProps<typeof Combobox>['onOptionSelect'] =
+    (_event, data): void => {
+      const typed = data as {
+        optionValue?: string;
+        optionText?: string;
+      };
 
-    setSelectedType(next);
-    if (onChange) onChange(next);
-  };
+      const next = typed.optionValue ?? typed.optionText ?? '';
+      setSelectedType(next);
+      if (onChange) onChange(next);
+    };
 
   return (
     <div
