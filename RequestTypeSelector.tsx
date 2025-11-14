@@ -5,8 +5,7 @@
 
 import * as React from 'react';
 import {
-  Combobox,
-  Option,
+  Select,
   Text,
   Label,
 } from '@fluentui/react-components';
@@ -41,7 +40,7 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
     onChange,
   } = props;
 
-  // Local value for the Combobox
+  // Local value for the Select
   const [selectedType, setSelectedType] = React.useState<string>(value ?? '');
 
   // Keep local state in sync if parent changes `value`
@@ -52,34 +51,16 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
   }, [value, selectedType]);
 
   /**
-   * Fired when the user types in the Combobox input.
-   * In this Fluent UI version, onChange is just a normal input
-   * ChangeEventHandler, so we only get the event.
+   * Native select-style change handler.
+   * This is just a regular ChangeEvent on an HTMLSelectElement.
    */
-  const handleChange: React.ChangeEventHandler<HTMLInputElement> = (
+  const handleChange: React.ChangeEventHandler<HTMLSelectElement> = (
     event
   ): void => {
     const next = event.target.value ?? '';
     setSelectedType(next);
     if (onChange) onChange(next);
   };
-
-  /**
-   * Fired when the user picks an option from the dropdown list.
-   * We let React infer the parameter types from the Combobox prop
-   * definition via React.ComponentProps.
-   */
-  const handleOptionSelect: React.ComponentProps<typeof Combobox>['onOptionSelect'] =
-    (_event, data): void => {
-      const typed = data as {
-        optionValue?: string;
-        optionText?: string;
-      };
-
-      const next = typed.optionValue ?? typed.optionText ?? '';
-      setSelectedType(next);
-      if (onChange) onChange(next);
-    };
 
   return (
     <div
@@ -149,22 +130,25 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
 
         {/* Dropdown column */}
         <div style={{ flex: 1 }}>
-          <Combobox
+          <Select
             id={id}
-            appearance="outline"
-            placeholder="Select a request type"
+            name={id}
             value={selectedType}
             onChange={handleChange}
-            onOptionSelect={handleOptionSelect}
+            style={{ width: '100%' }}
             title={selectedType || 'Select a request type'}
-            aria-label="Request Type"
           >
+            {/* Optional placeholder if you want nothing selected initially */}
+            {/* <option value="" disabled hidden>
+              Select a request type
+            </option> */}
+
             {requestTypes.map((rt) => (
-              <Option key={rt} value={rt}>
+              <option key={rt} value={rt}>
                 {rt}
-              </Option>
+              </option>
             ))}
-          </Combobox>
+          </Select>
         </div>
       </div>
     </div>
