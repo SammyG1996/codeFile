@@ -9,6 +9,8 @@ import {
   Option,
   Text,
   Label,
+  type ComboboxOnChangeData,
+  type ComboboxOnOptionSelectData,
 } from '@fluentui/react-components';
 
 export interface RequestTypeSelectorProps {
@@ -44,32 +46,41 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
   // Local value for the Combobox
   const [selectedType, setSelectedType] = React.useState<string>(value ?? '');
 
-  // Keep local state in sync if parent changes value
+  // Keep local state in sync if parent changes `value`
   React.useEffect((): void => {
     if (value !== undefined && value !== selectedType) {
       setSelectedType(value);
     }
   }, [value, selectedType]);
 
-  // Correctly typed handler for option selection
-  const handleOptionSelect: React.ComponentProps<typeof Combobox>['onOptionSelect'] =
-    (_event, data): void => {
-      const next =
-        (data.optionValue as string | undefined) ??
-        (data.optionText as string | undefined) ??
-        '';
+  /**
+   * Fired when the user types in the Combobox input.
+   * We use Fluent's ComboboxOnChangeData so there is no implicit `any`.
+   */
+  const handleChange = (
+    _event: React.ChangeEvent<HTMLInputElement>,
+    data: ComboboxOnChangeData
+  ): void => {
+    const next = data.value ?? '';
+    setSelectedType(next);
+    if (onChange) onChange(next);
+  };
 
-      setSelectedType(next);
-      if (onChange) onChange(next);
-    };
+  /**
+   * Fired when the user picks an option from the dropdown list.
+   */
+  const handleOptionSelect = (
+    _event: React.SyntheticEvent<Element, Event>,
+    data: ComboboxOnOptionSelectData
+  ): void => {
+    const next =
+      (data.optionValue as string | undefined) ??
+      (data.optionText as string | undefined) ??
+      '';
 
-  // Correctly typed handler for text change in the Combobox input
-  const handleChange: React.ComponentProps<typeof Combobox>['onChange'] =
-    (_event, data): void => {
-      const next = data.value ?? '';
-      setSelectedType(next);
-      if (onChange) onChange(next);
-    };
+    setSelectedType(next);
+    if (onChange) onChange(next);
+  };
 
   return (
     <div
