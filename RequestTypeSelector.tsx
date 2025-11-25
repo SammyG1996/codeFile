@@ -75,13 +75,6 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
   return (
     <div
       className="ks-requestTypeWrapper"
-      style={{
-        margin: '12px 0',
-        width: '100%',
-        padding: 0,
-        color: '#4a4a4a',
-        fontFamily: '"Times New Roman", Georgia, serif',
-      }}
     >
       {/* Instruction above the field */}
       <div style={{ marginBottom: 12 }}>
