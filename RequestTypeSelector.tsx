@@ -75,8 +75,8 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
       className="ks-requestTypeWrapper"
       style={{
         margin: '16px 0',
-        maxWidth: 1100,
-        padding: '8px 4px',
+        maxWidth: 1200,
+        padding: '4px 2px',
         color: '#4a4a4a',
         fontFamily: '"Times New Roman", Georgia, serif',
       }}
@@ -98,63 +98,52 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
       </div>
 
       {/* Request Type row */}
-      <div
-        className="ks-requestTypeRow"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-        }}
-      >
-        {/* Label column */}
-        <div style={{ minWidth: 150, paddingTop: 2 }}>
-          <Label
-            htmlFor={id}
-            style={{
-              fontWeight: 600,
-              fontSize: 18,
-              color: '#444',
-              display: 'flex',
-              alignItems: 'baseline',
-              gap: 4,
-            }}
-          >
-            <span>{label}</span>
-            <span style={{ color: '#c00000' }}>*</span>
-          </Label>
-        </div>
+      <div className="ks-requestTypeRow">
+        <Label
+          htmlFor={id}
+          style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            gap: 4,
+            fontWeight: 600,
+            fontSize: 18,
+            color: '#444',
+            marginBottom: 6,
+          }}
+        >
+          <span>{label}</span>
+          <span style={{ color: '#c00000' }}>*</span>
+        </Label>
 
-        {/* Dropdown column */}
-        <div style={{ flex: 1 }}>
-          <Select
-            id={id}
-            name={id}
-            value={selectedType}
-            onChange={handleChange}
-            style={{
-              width: '100%',
-              border: '1px solid #999',
-              borderRadius: 2,
-              backgroundColor: '#fff',
-              padding: '10px 12px',
-              fontSize: 15,
-              color: '#333',
-              boxShadow: 'none',
-              outline: 'none',
-            }}
-            disabled={isLocked}
-            title={selectedType || 'Select a request type'}
-          >
-            {/* Placeholder keeps the field blank initially */}
-            <option value="" disabled aria-label="Select a request type" />
+        <Select
+          id={id}
+          name={id}
+          value={selectedType}
+          onChange={handleChange}
+          style={{
+            width: '100%',
+            border: '1px solid #9a9a9a',
+            borderRadius: 0,
+            backgroundColor: '#fff',
+            padding: '10px 12px',
+            fontSize: 15,
+            color: '#333',
+            boxShadow: 'none',
+            outline: 'none',
+            minHeight: 42,
+          }}
+          disabled={isLocked}
+          title={selectedType || 'Select a request type'}
+        >
+          {/* Placeholder keeps the field blank initially */}
+          <option value="" disabled aria-label="Select a request type" />
 
-            {requestTypes.map((rt) => (
-              <option key={rt} value={rt}>
-                {rt}
-              </option>
-            ))}
-          </Select>
-        </div>
+          {requestTypes.map((rt) => (
+            <option key={rt} value={rt}>
+              {rt}
+            </option>
+          ))}
+        </Select>
       </div>
     </div>
   );
