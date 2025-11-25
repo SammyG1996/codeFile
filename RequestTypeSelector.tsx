@@ -117,15 +117,15 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
           onChange={handleChange}
           style={{
             width: '100%',
-            border: '1px solid #9a9a9a',
+            border: 'none',
             borderRadius: 0,
-            backgroundColor: '#fff',
-            padding: '10px 10px',
+            backgroundColor: 'transparent',
+            padding: 0,
             fontSize: 16,
             color: '#333',
             boxShadow: 'none',
             outline: 'none',
-            minHeight: 42,
+            minHeight: 36,
           }}
           title={selectedType || 'Select a request type'}
         >
