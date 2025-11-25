@@ -19,19 +19,20 @@ export interface RequestTypeSelectorProps {
   label?: string;
 }
 
+/**This is to provide a defuelt if nothing is passed down */
 const defaultRequestTypes: string[] = [
   'New-Online Help',
   'New-Policy',
   'New-Standard Operating Procedure (SOP)',
-  'New-Desktop Procedure (DP)',
-  'Change-Online Help',
-  'Change-Policy',
-  'Change-Standard Operating Procedure (SOP)',
-  'Change-Desktop Procedure (DP)',
-  'Archive (Online Help Only)',
-  'Retire (Procedural Documents Only)',
-  'Request for Information-Online Help',
-  'Request for Information-Procedural Documents',
+  'New-Desktop Procedure (DP)'
+  // 'Change-Online Help',
+  // 'Change-Policy',
+  // 'Change-Standard Operating Procedure (SOP)',
+  // 'Change-Desktop Procedure (DP)',
+  // 'Archive (Online Help Only)',
+  // 'Retire (Procedural Documents Only)',
+  // 'Request for Information-Online Help',
+  // 'Request for Information-Procedural Documents',
 ];
 
 const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
