@@ -1,7 +1,7 @@
 // RequestTypeSelector.tsx
 //
-// Renders the "Knowledge Services Request Form" header block plus the
-// "Request Type:*" dropdown as a single component.
+// Renders an instruction line plus a labeled "Request Type" dropdown.
+// Title and label text are configurable via props.
 
 import * as React from 'react';
 import {
@@ -15,6 +15,8 @@ export interface RequestTypeSelectorProps {
   requestTypes?: string[];
   value?: string;
   onChange?: (requestType: string) => void;
+  title?: string;
+  label?: string;
 }
 
 const defaultRequestTypes: string[] = [
@@ -38,15 +40,20 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
     requestTypes = defaultRequestTypes,
     value,
     onChange,
+    title = 'Please select Request Type to begin',
+    label = 'Request Type',
   } = props;
 
   // Local value for the Select
   const [selectedType, setSelectedType] = React.useState<string>(value ?? '');
+  // Once a user picks a value, lock the control to prevent re-selection
+  const [isLocked, setIsLocked] = React.useState<boolean>(Boolean(value));
 
   // Keep local state in sync if parent changes `value`
   React.useEffect((): void => {
     if (value !== undefined && value !== selectedType) {
       setSelectedType(value);
+      setIsLocked(Boolean(value));
     }
   }, [value, selectedType]);
 
@@ -59,6 +66,7 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
   ): void => {
     const next = event.target.value ?? '';
     setSelectedType(next);
+    if (next) setIsLocked(true);
     if (onChange) onChange(next);
   };
 
@@ -66,45 +74,26 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
     <div
       className="ks-requestTypeWrapper"
       style={{
-        margin: '24px auto',
-        maxWidth: 900,
-        border: '1px solid #ddd',
-        backgroundColor: '#fafafa',
-        padding: '24px 32px 32px',
+        margin: '16px 0',
+        maxWidth: 1100,
+        padding: '8px 4px',
+        color: '#4a4a4a',
+        fontFamily: '"Times New Roman", Georgia, serif',
       }}
     >
-      {/* Header block */}
-      <div style={{ textAlign: 'center', marginBottom: 24 }}>
-        <Text
-          size={500}
-          weight="semibold"
-          style={{ display: 'block', marginBottom: 8 }}
-        >
-          Knowledge Services Request Form
-        </Text>
-
-        <Text
-          size={300}
-          style={{ display: 'block', marginBottom: 8 }}
-        >
-          Please use this form to submit Knowledge Services Requests
-        </Text>
-
-        <Text
-          size={300}
-          style={{ display: 'block', color: 'red', fontWeight: 500 }}
-        >
-          Note: * Red Asterisk indicates a required field
-        </Text>
-      </div>
-
       {/* Instruction above the field */}
-      <div style={{ marginBottom: 8 }}>
+      <div style={{ marginBottom: 12 }}>
         <Text
-          size={300}
-          style={{ color: 'red', fontWeight: 500 }}
+          as="p"
+          size={400}
+          weight="semibold"
+          style={{
+            color: '#c00000',
+            margin: 0,
+            letterSpacing: '-0.2px',
+          }}
         >
-          Please select Request Type to begin
+          {title}
         </Text>
       </div>
 
@@ -118,13 +107,20 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
         }}
       >
         {/* Label column */}
-        <div style={{ minWidth: 120 }}>
+        <div style={{ minWidth: 150, paddingTop: 2 }}>
           <Label
             htmlFor={id}
-            required
-            style={{ fontWeight: 500 }}
+            style={{
+              fontWeight: 600,
+              fontSize: 18,
+              color: '#444',
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: 4,
+            }}
           >
-            Request Type:
+            <span>{label}</span>
+            <span style={{ color: '#c00000' }}>*</span>
           </Label>
         </div>
 
@@ -135,13 +131,22 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
             name={id}
             value={selectedType}
             onChange={handleChange}
-            style={{ width: '100%' }}
+            style={{
+              width: '100%',
+              border: '1px solid #999',
+              borderRadius: 2,
+              backgroundColor: '#fff',
+              padding: '10px 12px',
+              fontSize: 15,
+              color: '#333',
+              boxShadow: 'none',
+              outline: 'none',
+            }}
+            disabled={isLocked}
             title={selectedType || 'Select a request type'}
           >
-            {/* Optional placeholder if you want nothing selected initially */}
-            {/* <option value="" disabled hidden>
-              Select a request type
-            </option> */}
+            {/* Placeholder keeps the field blank initially */}
+            <option value="" disabled aria-label="Select a request type" />
 
             {requestTypes.map((rt) => (
               <option key={rt} value={rt}>
