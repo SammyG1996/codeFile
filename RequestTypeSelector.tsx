@@ -46,14 +46,16 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
 
   // Local value for the Select
   const [selectedType, setSelectedType] = React.useState<string>(value ?? '');
-  // Once a user picks a value, lock the control to prevent re-selection
-  const [isLocked, setIsLocked] = React.useState<boolean>(Boolean(value));
+  // After the first real selection, prevent returning to the blank option
+  const [placeholderLocked, setPlaceholderLocked] = React.useState<boolean>(
+    Boolean(value)
+  );
 
   // Keep local state in sync if parent changes `value`
   React.useEffect((): void => {
     if (value !== undefined && value !== selectedType) {
       setSelectedType(value);
-      setIsLocked(Boolean(value));
+      setPlaceholderLocked(Boolean(value));
     }
   }, [value, selectedType]);
 
@@ -66,7 +68,7 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
   ): void => {
     const next = event.target.value ?? '';
     setSelectedType(next);
-    if (next) setIsLocked(true);
+    if (next) setPlaceholderLocked(true);
     if (onChange) onChange(next);
   };
 
@@ -74,9 +76,9 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
     <div
       className="ks-requestTypeWrapper"
       style={{
-        margin: '16px 0',
-        maxWidth: 1200,
-        padding: '4px 2px',
+        margin: '12px 0',
+        width: '100%',
+        padding: 0,
         color: '#4a4a4a',
         fontFamily: '"Times New Roman", Georgia, serif',
       }}
@@ -125,18 +127,21 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
             border: '1px solid #9a9a9a',
             borderRadius: 0,
             backgroundColor: '#fff',
-            padding: '10px 12px',
-            fontSize: 15,
+            padding: '10px 10px',
+            fontSize: 16,
             color: '#333',
             boxShadow: 'none',
             outline: 'none',
             minHeight: 42,
           }}
-          disabled={isLocked}
           title={selectedType || 'Select a request type'}
         >
           {/* Placeholder keeps the field blank initially */}
-          <option value="" disabled aria-label="Select a request type" />
+          <option
+            value=""
+            disabled={placeholderLocked}
+            aria-label="Select a request type"
+          />
 
           {requestTypes.map((rt) => (
             <option key={rt} value={rt}>
