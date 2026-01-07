@@ -1,0 +1,546 @@
+{
+  "schemaVersion": "1.0.0",
+  "app": {
+    "name": "LetsFixIt",
+    "title": "Let’s Fix It Request",
+    "description": "Online Help issue intake + workflow routing for TW / KS / Team Lead / Submitter."
+  },
+  "enums": {
+    "issueType": [
+      {
+        "value": "404_ERROR",
+        "label": "404 Error",
+        "meaning": "Unable to access an Online Help page/web page."
+      },
+      {
+        "value": "INACCURATE_CONTENT",
+        "label": "Inaccurate Content",
+        "meaning": "Incorrect process/invalid info/typos/missing image, etc."
+      },
+      {
+        "value": "SEARCH_BROKEN",
+        "label": "Search Broken",
+        "meaning": "Can’t use search feature / incorrect search results."
+      },
+      {
+        "value": "TOPIC_INACCESSIBLE",
+        "label": "Topic Inaccessible",
+        "meaning": "Link to topic doesn’t open / received removed or deleted message."
+      },
+      {
+        "value": "TOPIC_LINKS_BROKEN",
+        "label": "Topic Links Broken",
+        "meaning": "Unable to view a link within a topic."
+      },
+      {
+        "value": "WEB_NAVIGATION_BROKEN",
+        "label": "Web Navigation Broken",
+        "meaning": "Unable to navigate across pages (tips, Let’s Fix It, etc.)."
+      }
+    ],
+    "status": [
+      { "value": "OPEN", "label": "Open" },
+      { "value": "ASSIGNED_TO_TW", "label": "Assigned to TW" },
+      { "value": "ASSIGNED_TO_KS_DEV", "label": "Assigned to KS Developer" },
+      { "value": "IN_PROGRESS", "label": "In Progress" },
+      { "value": "REASSIGNED_TO_TW", "label": "Reassigned to TW" },
+      { "value": "ROUTE_TO_TEAM_LEAD", "label": "Route to Team Lead" },
+      { "value": "ROUTE_TO_SUBMITTER", "label": "Route to Submitter" },
+      { "value": "RETURNED_FROM_ROUTE", "label": "Returned from Route" },
+      { "value": "COMPLETE", "label": "Complete" },
+      { "value": "CANCELLED", "label": "Cancelled" }
+    ],
+    "resolutionType": [
+      {
+        "group": "COMPLETE",
+        "values": [
+          { "value": "CONTENT_CHANGED", "label": "Content Changed / Topic Updated" },
+          { "value": "BROKEN_LINKS_RESOLVED", "label": "Broken Links Resolved" },
+          { "value": "EDUCATION_PROVIDED", "label": "Education Provided" },
+          { "value": "TECHNICAL_ISSUE_RESOLVED", "label": "Technical Issue Resolved" }
+        ]
+      },
+      {
+        "group": "CANCELLED",
+        "values": [
+          { "value": "NOT_VALID_CHANGE_REQUEST", "label": "Not a Valid Change Request" },
+          { "value": "NO_RESPONSE_FROM_SUBMITTER", "label": "No Response from Submitter" },
+          { "value": "NO_RESPONSE_FROM_TEAM_LEAD", "label": "No Response from Team Lead" }
+        ]
+      }
+    ],
+    "brokenLinkType": [
+      { "value": "DROPDOWN", "label": "Dropdown" },
+      { "value": "POPUPS", "label": "Pop-ups" },
+      { "value": "EXTERNAL_PAGE", "label": "Link to external page" },
+      { "value": "OTHER_PAGE", "label": "Link to other page" },
+      { "value": "DOCUMENT", "label": "Link to document" },
+      { "value": "FAVORITES", "label": "Favorites link" },
+      { "value": "OTHER", "label": "Other" }
+    ],
+    "roles": [
+      { "value": "SUBMITTER", "label": "Submitter (Business)" },
+      { "value": "PROCEDURES_ANALYST", "label": "Procedures Analyst (Triage)" },
+      { "value": "TECHNICAL_WRITER", "label": "Technical Writer" },
+      { "value": "KS_MANAGER_DEV", "label": "KS Manager/Developer" },
+      { "value": "TEAM_LEAD", "label": "Team Lead" },
+      { "value": "SYSTEM", "label": "System Workflow" }
+    ]
+  },
+  "fields": [
+    {
+      "id": "issueType",
+      "label": "Issue Type",
+      "type": "choice",
+      "required": true,
+      "enumRef": "issueType",
+      "editableByRoles": ["SUBMITTER", "PROCEDURES_ANALYST", "TECHNICAL_WRITER"]
+    },
+
+    { "id": "submitterName", "label": "Submitter", "type": "text", "required": true, "source": "auto", "editableByRoles": [] },
+    { "id": "submitterDepartment", "label": "Department", "type": "text", "required": true, "source": "auto", "editableByRoles": [] },
+
+    {
+      "id": "pageUrl",
+      "label": "Page URL",
+      "type": "url",
+      "required": true,
+      "helpText": "The topic URL containing topic name + LOB / Online Help file.",
+      "editableByRoles": ["SUBMITTER", "PROCEDURES_ANALYST", "TECHNICAL_WRITER"]
+    },
+    { "id": "topicName", "label": "Topic Name", "type": "text", "required": true, "editableByRoles": ["SUBMITTER", "PROCEDURES_ANALYST", "TECHNICAL_WRITER"] },
+
+    {
+      "id": "topicErrorMessage",
+      "label": "Topic Error Message",
+      "type": "textarea",
+      "required": false,
+      "editableByRoles": ["SUBMITTER", "PROCEDURES_ANALYST", "TECHNICAL_WRITER"],
+      "visibility": {
+        "whenAll": [{ "field": "issueType", "op": "eq", "value": "404_ERROR" }]
+      },
+      "validation": {
+        "requiredWhenAll": [{ "field": "issueType", "op": "eq", "value": "404_ERROR" }]
+      }
+    },
+
+    { "id": "describeIssue", "label": "Describe the Issue", "type": "textarea", "required": true, "editableByRoles": ["SUBMITTER", "PROCEDURES_ANALYST", "TECHNICAL_WRITER"] },
+
+    {
+      "id": "inaccurateContentText",
+      "label": "Inaccurate content currently listed in Online Help",
+      "type": "textarea",
+      "required": false,
+      "editableByRoles": ["SUBMITTER", "PROCEDURES_ANALYST", "TECHNICAL_WRITER"],
+      "visibility": {
+        "whenAll": [{ "field": "issueType", "op": "eq", "value": "INACCURATE_CONTENT" }]
+      },
+      "validation": {
+        "requiredWhenAll": [{ "field": "issueType", "op": "eq", "value": "INACCURATE_CONTENT" }]
+      }
+    },
+
+    {
+      "id": "searchBrokenDetails",
+      "label": "Describe the broken search issue",
+      "type": "textarea",
+      "required": false,
+      "helpText": "Examples: “X button does not refresh search”, “Other”.",
+      "editableByRoles": ["SUBMITTER", "PROCEDURES_ANALYST", "TECHNICAL_WRITER", "KS_MANAGER_DEV"],
+      "visibility": {
+        "whenAll": [{ "field": "issueType", "op": "eq", "value": "SEARCH_BROKEN" }]
+      },
+      "validation": {
+        "requiredWhenAll": [{ "field": "issueType", "op": "eq", "value": "SEARCH_BROKEN" }]
+      }
+    },
+
+    {
+      "id": "brokenLinkType",
+      "label": "Broken Link Type",
+      "type": "choice",
+      "required": false,
+      "enumRef": "brokenLinkType",
+      "editableByRoles": ["SUBMITTER", "PROCEDURES_ANALYST", "TECHNICAL_WRITER"],
+      "visibility": {
+        "whenAll": [{ "field": "issueType", "op": "eq", "value": "TOPIC_LINKS_BROKEN" }]
+      },
+      "validation": {
+        "requiredWhenAll": [{ "field": "issueType", "op": "eq", "value": "TOPIC_LINKS_BROKEN" }]
+      }
+    },
+    {
+      "id": "topicLinksDetails",
+      "label": "Topic Links Details",
+      "type": "textarea",
+      "required": false,
+      "editableByRoles": ["SUBMITTER", "PROCEDURES_ANALYST", "TECHNICAL_WRITER"],
+      "visibility": {
+        "whenAll": [{ "field": "issueType", "op": "eq", "value": "TOPIC_LINKS_BROKEN" }]
+      },
+      "validation": {
+        "requiredWhenAll": [{ "field": "issueType", "op": "eq", "value": "TOPIC_LINKS_BROKEN" }]
+      }
+    },
+
+    { "id": "comments", "label": "Comments", "type": "textarea", "required": false, "editableByRoles": ["PROCEDURES_ANALYST", "TECHNICAL_WRITER", "KS_MANAGER_DEV", "TEAM_LEAD"] },
+    { "id": "internalCommentsHistory", "label": "Internal Comments History", "type": "auditLog", "readOnly": true },
+
+    { "id": "attachments", "label": "Supporting Documentation / Attachments", "type": "attachments", "required": false, "editableByRoles": ["SUBMITTER", "PROCEDURES_ANALYST", "TECHNICAL_WRITER"] },
+
+    { "id": "requestId", "label": "Request ID", "type": "text", "source": "auto", "readOnly": true },
+    { "id": "submittedBy", "label": "Submitted By", "type": "person", "source": "auto", "readOnly": true },
+
+    { "id": "overallStatusHistory", "label": "Overall Request Status", "type": "statusHistory", "readOnly": true },
+
+    {
+      "id": "status",
+      "label": "Status",
+      "type": "choice",
+      "enumRef": "status",
+      "required": true,
+      "source": "workflow",
+      "editableByRoles": ["PROCEDURES_ANALYST", "TECHNICAL_WRITER", "KS_MANAGER_DEV", "TEAM_LEAD"]
+    },
+
+    {
+      "id": "assignedTo",
+      "label": "Assigned To",
+      "type": "person",
+      "required": false,
+      "editableByRoles": ["PROCEDURES_ANALYST", "TECHNICAL_WRITER"]
+    },
+    {
+      "id": "assignToTeamLead",
+      "label": "Assign to Team Lead",
+      "type": "person",
+      "required": false,
+      "editableByRoles": ["TECHNICAL_WRITER"],
+      "visibility": {
+        "whenAll": [{ "field": "status", "op": "eq", "value": "ROUTE_TO_TEAM_LEAD" }]
+      }
+    },
+
+    {
+      "id": "resolutionType",
+      "label": "Resolution Type",
+      "type": "choice",
+      "required": false,
+      "editableByRoles": ["PROCEDURES_ANALYST", "TECHNICAL_WRITER", "KS_MANAGER_DEV", "TEAM_LEAD"],
+      "visibility": {
+        "whenAny": [
+          { "field": "status", "op": "eq", "value": "COMPLETE" },
+          { "field": "status", "op": "eq", "value": "CANCELLED" }
+        ]
+      },
+      "validation": {
+        "requiredWhenAny": [
+          { "field": "status", "op": "eq", "value": "COMPLETE" },
+          { "field": "status", "op": "eq", "value": "CANCELLED" }
+        ],
+        "allowedValuesByStatus": {
+          "COMPLETE": ["CONTENT_CHANGED", "BROKEN_LINKS_RESOLVED", "EDUCATION_PROVIDED", "TECHNICAL_ISSUE_RESOLVED"],
+          "CANCELLED": ["NOT_VALID_CHANGE_REQUEST", "NO_RESPONSE_FROM_SUBMITTER", "NO_RESPONSE_FROM_TEAM_LEAD"]
+        }
+      }
+    }
+  ],
+  "fieldGroups": [
+    {
+      "id": "core",
+      "label": "Core Form Fields",
+      "fieldIds": ["issueType", "submitterName", "submitterDepartment", "pageUrl", "topicName", "topicErrorMessage", "describeIssue"]
+    },
+    {
+      "id": "issueTypeDetails",
+      "label": "Issue Type Details (Conditional)",
+      "fieldIds": ["inaccurateContentText", "searchBrokenDetails", "brokenLinkType", "topicLinksDetails"]
+    },
+    {
+      "id": "supportingAudit",
+      "label": "Supporting / Audit",
+      "fieldIds": ["attachments", "comments", "internalCommentsHistory", "requestId", "submittedBy", "overallStatusHistory", "status", "assignedTo", "assignToTeamLead", "resolutionType"]
+    }
+  ],
+  "actions": [
+    {
+      "id": "SUBMIT",
+      "label": "Submit",
+      "type": "primary",
+      "enabledWhen": { "always": true },
+      "effects": ["SAVE", "APPLY_STATE_MACHINE_TRANSITION"]
+    },
+    {
+      "id": "CANCEL",
+      "label": "Cancel",
+      "type": "danger",
+      "enabledWhen": { "always": true },
+      "effects": ["SET_STATUS:CANCELLED", "SAVE", "APPLY_STATE_MACHINE_TRANSITION"]
+    }
+  ],
+  "routingRules": [
+    {
+      "id": "ROUTE_TO_KS_DEV",
+      "whenAll": [{ "field": "issueType", "op": "in", "value": ["WEB_NAVIGATION_BROKEN", "SEARCH_BROKEN"] }],
+      "set": { "status": "ASSIGNED_TO_KS_DEV" },
+      "notes": "Procedures Analyst assigns to designated KS Developer."
+    },
+    {
+      "id": "ROUTE_TO_TW",
+      "whenAll": [
+        {
+          "field": "issueType",
+          "op": "in",
+          "value": ["404_ERROR", "TOPIC_INACCESSIBLE", "TOPIC_LINKS_BROKEN", "INACCURATE_CONTENT"]
+        }
+      ],
+      "set": { "status": "ASSIGNED_TO_TW" },
+      "notes": "Procedures Analyst assigns to TW based on cost center / Page URL LOB."
+    }
+  ],
+  "stateMachine": {
+    "initialStatus": "OPEN",
+    "transitions": [
+      {
+        "from": "OPEN",
+        "to": "ASSIGNED_TO_TW",
+        "byRoles": ["PROCEDURES_ANALYST"],
+        "guard": { "field": "issueType", "op": "in", "value": ["404_ERROR", "TOPIC_INACCESSIBLE", "TOPIC_LINKS_BROKEN", "INACCURATE_CONTENT"] }
+      },
+      {
+        "from": "OPEN",
+        "to": "ASSIGNED_TO_KS_DEV",
+        "byRoles": ["PROCEDURES_ANALYST"],
+        "guard": { "field": "issueType", "op": "in", "value": ["WEB_NAVIGATION_BROKEN", "SEARCH_BROKEN"] }
+      },
+      {
+        "from": "ASSIGNED_TO_TW",
+        "to": "IN_PROGRESS",
+        "byRoles": ["TECHNICAL_WRITER"]
+      },
+      {
+        "from": "ASSIGNED_TO_TW",
+        "to": "ROUTE_TO_SUBMITTER",
+        "byRoles": ["TECHNICAL_WRITER"],
+        "guard": { "anyMissingRequiredFields": true }
+      },
+      {
+        "from": "IN_PROGRESS",
+        "to": "ROUTE_TO_TEAM_LEAD",
+        "byRoles": ["TECHNICAL_WRITER"],
+        "guard": { "field": "issueType", "op": "eq", "value": "INACCURATE_CONTENT" }
+      },
+      {
+        "from": "ROUTE_TO_TEAM_LEAD",
+        "to": "RETURNED_FROM_ROUTE",
+        "byRoles": ["TEAM_LEAD", "SYSTEM"],
+        "notes": "Auto when business returns info."
+      },
+      {
+        "from": "ROUTE_TO_SUBMITTER",
+        "to": "RETURNED_FROM_ROUTE",
+        "byRoles": ["SUBMITTER", "SYSTEM"],
+        "notes": "Auto when business returns info."
+      },
+      {
+        "from": "RETURNED_FROM_ROUTE",
+        "to": "IN_PROGRESS",
+        "byRoles": ["TECHNICAL_WRITER", "KS_MANAGER_DEV"]
+      },
+      {
+        "from": "IN_PROGRESS",
+        "to": "COMPLETE",
+        "byRoles": ["TECHNICAL_WRITER", "KS_MANAGER_DEV"],
+        "guard": {
+          "requireFields": ["resolutionType", "comments"],
+          "requireCommentMinLength": 3
+        }
+      },
+      {
+        "from": "IN_PROGRESS",
+        "to": "CANCELLED",
+        "byRoles": ["TECHNICAL_WRITER", "PROCEDURES_ANALYST", "KS_MANAGER_DEV"],
+        "guard": {
+          "requireFields": ["resolutionType", "comments"],
+          "requireCommentMinLength": 3
+        }
+      },
+      {
+        "from": "ASSIGNED_TO_TW",
+        "to": "REASSIGNED_TO_TW",
+        "byRoles": ["PROCEDURES_ANALYST", "TECHNICAL_WRITER"],
+        "guard": { "requireFields": ["assignedTo", "comments"] }
+      },
+      {
+        "from": "REASSIGNED_TO_TW",
+        "to": "ASSIGNED_TO_TW",
+        "byRoles": ["SYSTEM", "TECHNICAL_WRITER"],
+        "notes": "After reassignment is saved, item returns to TW queue."
+      }
+    ]
+  },
+  "processSteps": {
+    "twIntakeChecklist": [
+      "Monitor inbox for new Let’s Fix It requests.",
+      "Open the “new request” email to confirm it’s a Let’s Fix It request.",
+      "Click form link to open the request.",
+      "Verify required fields are filled.",
+      "Use Page URL to identify LOB / Online Help file.",
+      "Use Topic Name to locate the content area to fix.",
+      "Review attachments (if any).",
+      "Determine Team Lead (if necessary).",
+      "Confirm form is complete before continuing."
+    ],
+    "incompleteInaccurateForms": [
+      "Route to Submitter (with comments) requesting missing info.",
+      "If no response by timing guidelines: add note in Comments, set Status = Cancelled, select Resolution Type = No Response…, Submit."
+    ],
+    "reassigning": [
+      "Set Status = Reassigned to TW",
+      "Select Technical Writer in Assigned To",
+      "Add reason in Comments",
+      "Submit"
+    ],
+    "issueTypeSpecific": {
+      "404_ERROR": [
+        "Navigate to affected OLH topic (front-end) and review the error message.",
+        "If error message does not appear → treat as Incomplete/Inaccurate Form flow.",
+        "If error message appears: resolve error, publish topic, update What’s New (if applicable), then set Status = Complete, add resolution details in Comments, select Resolution Type, Submit.",
+        "If it cannot be resolved (ex: external link): contact Sr. Tech Writer, add note in Comments, keep Status = In Progress, Submit; after resolved, return and document final notes."
+      ],
+      "INACCURATE_CONTENT": [
+        "Navigate to affected OLH topic to review content.",
+        "Add notes in Comments about forwarding.",
+        "Set Status = Route to Team Lead.",
+        "Select Team Lead / business associate in Assign to Team Lead.",
+        "Submit.",
+        "After response: update + publish topic (include What’s New if applicable), enter resolution details, set Status = Complete or Cancelled, select Resolution Type, Submit.",
+        "Timing note: allow ~5 business days (not incl. holidays/weekends); if no response, cancel and document."
+      ],
+      "TOPIC_INACCESSIBLE": [
+        "Navigate to the topic to confirm accessibility.",
+        "If accessible → treat as Incomplete/Inaccurate Form flow.",
+        "If not accessible: open topic in Dev List, check for broken links + resolve, update What’s New (if applicable), publish, set Status = Complete, select Resolution Type, Submit."
+      ],
+      "TOPIC_LINKS_BROKEN": [
+        "Navigate to the topic to identify broken links.",
+        "If broken links do not exist → Incomplete/Inaccurate Form flow.",
+        "If broken links exist: open in Dev List, resolve broken link(s), update What’s New (if applicable), publish, set Status = Complete, add resolution details in Comments, select Resolution Type, Submit."
+      ],
+      "SEARCH_BROKEN": [
+        "Confirm Issue Type + description is accurate.",
+        "Reassign (with comments) to KS Manager of Knowledge Services Applications.",
+        "KS Manager resolves + completes the form."
+      ],
+      "WEB_NAVIGATION_BROKEN": [
+        "Confirm Issue Type + description is accurate.",
+        "Reassign (with comments) to KS Manager of Knowledge Services Applications.",
+        "KS Manager resolves + completes the form."
+      ]
+    }
+  },
+  "roleRules": {
+    "fieldEditLocks": [
+      {
+        "whenAnyStatus": ["COMPLETE", "CANCELLED"],
+        "lockAllFieldsExcept": ["internalCommentsHistory", "overallStatusHistory"]
+      }
+    ],
+    "statusEditByRole": {
+      "SUBMITTER": [],
+      "PROCEDURES_ANALYST": ["ASSIGNED_TO_TW", "ASSIGNED_TO_KS_DEV", "REASSIGNED_TO_TW", "CANCELLED"],
+      "TECHNICAL_WRITER": ["IN_PROGRESS", "ROUTE_TO_TEAM_LEAD", "ROUTE_TO_SUBMITTER", "COMPLETE", "CANCELLED", "REASSIGNED_TO_TW"],
+      "KS_MANAGER_DEV": ["IN_PROGRESS", "COMPLETE", "CANCELLED"],
+      "TEAM_LEAD": [],
+      "SYSTEM": ["RETURNED_FROM_ROUTE"]
+    }
+  },
+  "flowchart": {
+    "nodes": [
+      { "id": "N1", "label": "Submitter submits form", "type": "start", "swimlane": "Submitter", "statusOnEnter": "OPEN" },
+      { "id": "N2", "label": "System sends request to Procedures Analyst mailbox", "type": "process", "swimlane": "System" },
+      { "id": "N3", "label": "Procedures Analyst reviews for accuracy", "type": "process", "swimlane": "Procedures Analyst" },
+      {
+        "id": "N4",
+        "label": "Decision: Issue Type?",
+        "type": "decision",
+        "swimlane": "Procedures Analyst",
+        "decisionKey": "issueTypeRouting"
+      },
+      { "id": "N5", "label": "Assign to KS Developer", "type": "process", "swimlane": "Procedures Analyst", "statusOnEnter": "ASSIGNED_TO_KS_DEV" },
+      { "id": "N6", "label": "KS Manager/Dev resolves and completes", "type": "process", "swimlane": "KS Manager/Dev" },
+      { "id": "N7", "label": "Assign to Technical Writer", "type": "process", "swimlane": "Procedures Analyst", "statusOnEnter": "ASSIGNED_TO_TW" },
+      { "id": "N8", "label": "TW intake + set In Progress", "type": "process", "swimlane": "Technical Writer", "statusOnEnter": "IN_PROGRESS" },
+      { "id": "N9", "label": "Decision: Form complete/accurate?", "type": "decision", "swimlane": "Technical Writer", "decisionKey": "formCompleteness" },
+      { "id": "N10", "label": "Route to Submitter for missing info", "type": "process", "swimlane": "Technical Writer", "statusOnEnter": "ROUTE_TO_SUBMITTER" },
+      { "id": "N11", "label": "Returned from Route", "type": "process", "swimlane": "System", "statusOnEnter": "RETURNED_FROM_ROUTE" },
+      { "id": "N12", "label": "Issue-specific processing (TW)", "type": "process", "swimlane": "Technical Writer" },
+      { "id": "N13", "label": "Decision: Inaccurate Content needs Team Lead?", "type": "decision", "swimlane": "Technical Writer", "decisionKey": "needsTeamLead" },
+      { "id": "N14", "label": "Route to Team Lead", "type": "process", "swimlane": "Technical Writer", "statusOnEnter": "ROUTE_TO_TEAM_LEAD" },
+      { "id": "N15", "label": "Team Lead responds", "type": "process", "swimlane": "Team Lead" },
+      { "id": "N16", "label": "Complete request (resolution required)", "type": "end", "swimlane": "Technical Writer", "statusOnEnter": "COMPLETE" },
+      { "id": "N17", "label": "Cancel request (resolution required)", "type": "end", "swimlane": "Technical Writer", "statusOnEnter": "CANCELLED" }
+    ],
+    "edges": [
+      { "from": "N1", "to": "N2", "label": "Submit" },
+      { "from": "N2", "to": "N3", "label": "Email notification" },
+      { "from": "N3", "to": "N4", "label": "Triage" },
+
+      {
+        "from": "N4",
+        "to": "N5",
+        "label": "Issue Type = Search Broken OR Web Navigation Broken",
+        "condition": { "field": "issueType", "op": "in", "value": ["SEARCH_BROKEN", "WEB_NAVIGATION_BROKEN"] }
+      },
+      {
+        "from": "N4",
+        "to": "N7",
+        "label": "Issue Type = 404/Topic Inaccessible/Topic Links Broken/Inaccurate Content",
+        "condition": {
+          "field": "issueType",
+          "op": "in",
+          "value": ["404_ERROR", "TOPIC_INACCESSIBLE", "TOPIC_LINKS_BROKEN", "INACCURATE_CONTENT"]
+        }
+      },
+
+      { "from": "N5", "to": "N6", "label": "Assigned" },
+      { "from": "N6", "to": "N16", "label": "Resolved → Complete", "condition": { "field": "status", "op": "eq", "value": "COMPLETE" } },
+      { "from": "N6", "to": "N17", "label": "Not resolved → Cancelled", "condition": { "field": "status", "op": "eq", "value": "CANCELLED" } },
+
+      { "from": "N7", "to": "N8", "label": "TW begins work" },
+      { "from": "N8", "to": "N9", "label": "Validate required fields" },
+
+      { "from": "N9", "to": "N10", "label": "Missing/incorrect", "condition": { "decisionKey": "formCompleteness", "equals": "INCOMPLETE" } },
+      { "from": "N9", "to": "N12", "label": "Complete/accurate", "condition": { "decisionKey": "formCompleteness", "equals": "COMPLETE" } },
+
+      { "from": "N10", "to": "N11", "label": "Submitter responds / system updates" },
+      { "from": "N11", "to": "N8", "label": "Resume work" },
+
+      { "from": "N12", "to": "N13", "label": "If Inaccurate Content" },
+      { "from": "N13", "to": "N14", "label": "Yes", "condition": { "decisionKey": "needsTeamLead", "equals": true } },
+      { "from": "N14", "to": "N15", "label": "Await response" },
+      { "from": "N15", "to": "N11", "label": "Returned from route" },
+
+      { "from": "N12", "to": "N16", "label": "Resolved → Complete", "condition": { "field": "status", "op": "eq", "value": "COMPLETE" } },
+      { "from": "N12", "to": "N17", "label": "Cancel per guidelines", "condition": { "field": "status", "op": "eq", "value": "CANCELLED" } }
+    ],
+    "decisionMaps": {
+      "issueTypeRouting": {
+        "SEARCH_BROKEN": "KS",
+        "WEB_NAVIGATION_BROKEN": "KS",
+        "404_ERROR": "TW",
+        "TOPIC_INACCESSIBLE": "TW",
+        "TOPIC_LINKS_BROKEN": "TW",
+        "INACCURATE_CONTENT": "TW"
+      },
+      "formCompleteness": {
+        "COMPLETE": "All required + conditional required fields present",
+        "INCOMPLETE": "Missing required fields and/or conditional fields for chosen Issue Type"
+      },
+      "needsTeamLead": {
+        "true": "Issue Type = Inaccurate Content and needs verification",
+        "false": "No Team Lead verification needed"
+      }
+    }
+  }
+}
