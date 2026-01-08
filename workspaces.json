@@ -5,20 +5,20 @@
     "ks_forms/*"
   ],
   "scripts": {
+    "install:all": "npm install",
+
     "build:shared": "npm -w @ks/shared run build",
 
-    "serve:a": "npm run build:shared && npm -w spfx-solution-a run serve",
-    "serve:b": "npm run build:shared && npm -w spfx-solution-b run serve",
-    "serve:c": "npm run build:shared && npm -w spfx-solution-c run serve",
+    "serve:customForm": "npm run build:shared && npm -w customForm run serve",
+    "serve:EOKMLib": "npm run build:shared && npm -w EOKMLib run serve",
+    "serve:LetsFixIt2": "npm run build:shared && npm -w LetsFixIt2 run serve",
 
-    "bundle:a": "npm run build:shared && npm -w spfx-solution-a run bundle",
-    "bundle:b": "npm run build:shared && npm -w spfx-solution-b run bundle",
-    "bundle:c": "npm run build:shared && npm -w spfx-solution-c run bundle",
+    "bundle:customForm": "npm run build:shared && npm -w customForm run bundle",
+    "bundle:EOKMLib": "npm run build:shared && npm -w EOKMLib run bundle",
+    "bundle:LetsFixIt2": "npm run build:shared && npm -w LetsFixIt2 run bundle",
 
-    "package:a": "npm run build:shared && npm -w spfx-solution-a run package",
-    "package:b": "npm run build:shared && npm -w spfx-solution-b run package",
-    "package:c": "npm run build:shared && npm -w spfx-solution-c run package"
+    "package:customForm": "npm run build:shared && npm -w customForm run package",
+    "package:EOKMLib": "npm run build:shared && npm -w EOKMLib run package",
+    "package:LetsFixIt2": "npm run build:shared && npm -w LetsFixIt2 run package"
   }
 }
-
-// Replace spfx-solution-a/b/c with your real folder/package names.
