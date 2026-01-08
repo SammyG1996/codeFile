@@ -1,0 +1,24 @@
+{
+  "name": "ks-forms-monorepo",
+  "private": true,
+  "workspaces": [
+    "ks_forms/*"
+  ],
+  "scripts": {
+    "build:shared": "npm -w @ks/shared run build",
+
+    "serve:a": "npm run build:shared && npm -w spfx-solution-a run serve",
+    "serve:b": "npm run build:shared && npm -w spfx-solution-b run serve",
+    "serve:c": "npm run build:shared && npm -w spfx-solution-c run serve",
+
+    "bundle:a": "npm run build:shared && npm -w spfx-solution-a run bundle",
+    "bundle:b": "npm run build:shared && npm -w spfx-solution-b run bundle",
+    "bundle:c": "npm run build:shared && npm -w spfx-solution-c run bundle",
+
+    "package:a": "npm run build:shared && npm -w spfx-solution-a run package",
+    "package:b": "npm run build:shared && npm -w spfx-solution-b run package",
+    "package:c": "npm run build:shared && npm -w spfx-solution-c run package"
+  }
+}
+
+// Replace spfx-solution-a/b/c with your real folder/package names.
