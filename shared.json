@@ -1,0 +1,56 @@
+//shared/package.json
+
+{
+  "name": "@ks/shared",
+  "version": "1.0.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "react": "*",
+    "react-dom": "*"
+  }
+}
+
+
+//shared/tsconfig.json
+
+{
+  "compilerOptions": {
+    "target": "ES2019",
+    "module": "commonjs",
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "jsx": "react",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true
+  },
+  "include": ["src"]
+}
+
+
+
+//shared/src/index.ts
+
+export { FormHeader } from "./components/FormHeader";
+
+//src/components/FormHeader.tsx
+
+import * as React from "react";
+
+export function FormHeader(props: { title: string; subtitle?: string }) {
+  return (
+    <div>
+      <h2>{props.title}</h2>
+      {props.subtitle ? <p>{props.subtitle}</p> : null}
+    </div>
+  );
+}
+
+
