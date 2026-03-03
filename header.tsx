@@ -25,10 +25,38 @@
  * />
  */
 
-import * as React from 'react';
-import { Text, Link, makeStyles, shorthands } from '@fluentui/react-components';
+/**
+ * HeaderComponent.tsx
+ *
+ * Renders a standard form header block:
+ * - AmeriHealth Caritas logo
+ * - Title
+ * - Subtitle
+ * - Optional help link line
+ * - Required-fields note (red)
+ *
+ * Example usage:
+ *
+ * <HeaderComponent
+ *   title="Form Title Goes Here"
+ *   subtitle="Form Subtitle goes here"
+ * />
+ *
+ * <HeaderComponent
+ *   title="Let's Fix It"
+ *   subtitle="Please use this form to submit any issues identified while navigating in new Online Help Environment."
+ *   linkUrl="https://amerihealthcaritas.sharepoint.com/sites/eokm/Online%20Help%20Assets/TopicView.aspx?ID=Let%26%23039%3Bs%20Fix%20It-LstNme=Systems"
+ *   linkText="Please refer to the Online Help Topic “Let’s Fix It” for further instructions."
+ * />
+ */
 
-// SPFx-friendly image import (ensure your bundler is already handling .png imports)
+import * as React from 'react';
+import { Link, Image, makeStyles, shorthands } from '@fluentui/react-components';
+
+// NOTE: Path must be correct relative to THIS file.
+// Based on your explorer, the image is under: src/extensions/letsFixIt/img/AMFCNewLogo.png
+// This component is under: src/extensions/letsFixIt/components/HeaderComponent.tsx
+// So the correct relative path is: ../img/AMFCNewLogo.png
 import AMFCNewLogo from '../img/AMFCNewLogo.png';
 
 export interface HeaderComponentProps {
@@ -40,7 +68,7 @@ export interface HeaderComponentProps {
 
   /**
    * Optional “help / instructions” hyperlink line.
-   * If linkUrl is provided, linkText will be shown as a clickable link.
+   * If linkUrl is provided, linkText will be shown as the clickable label.
    */
   linkUrl?: string;
   linkText?: string;
@@ -55,9 +83,10 @@ export interface HeaderComponentProps {
   className?: string;
 }
 
+const DEFAULT_NOTE = 'Note: * Red asterisk indicates a required field';
+
 const useStyles = makeStyles({
   wrapper: {
-    // Creates the “card” look from the screenshot
     backgroundColor: '#ffffff',
     ...shorthands.border('1px', 'solid', '#d0d0d0'),
     ...shorthands.padding('20px', '24px'),
@@ -74,12 +103,6 @@ const useStyles = makeStyles({
     alignItems: 'center',
     textAlign: 'center',
     rowGap: '10px',
-  },
-
-  logo: {
-    width: '220px',
-    height: 'auto',
-    display: 'block',
   },
 
   title: {
@@ -106,51 +129,46 @@ const useStyles = makeStyles({
   note: {
     fontSize: '13px',
     fontWeight: 600,
-    color: '#b10000', // red note line
+    color: '#b10000',
+  },
+
+  logo: {
+    width: '220px',
+    height: 'auto',
   },
 });
-
-const DEFAULT_NOTE = 'Note: * Red asterisk indicates a required field';
 
 const HeaderComponent = (props: HeaderComponentProps): JSX.Element => {
   const { title, subtitle, linkUrl, linkText, noteText = DEFAULT_NOTE, className } = props;
 
   const styles = useStyles();
 
-  // If a link URL is provided but no custom text is provided, we’ll display the URL as the link text.
+  // If linkUrl is provided but no linkText is provided, fall back to showing the URL.
   const resolvedLinkText: string | undefined = linkUrl ? (linkText || linkUrl) : undefined;
 
   return (
     <div className={`${styles.wrapper}${className ? ` ${className}` : ''}`}>
       <div className={styles.content}>
         {/* Logo */}
-        <img src={AMFCNewLogo} alt="AmeriHealth Caritas" className={styles.logo} />
+        <Image src={AMFCNewLogo} alt="AmeriHealth Caritas" className={styles.logo} />
 
         {/* Title */}
-        <Text as="div" className={styles.title}>
-          {title}
-        </Text>
+        <div className={styles.title}>{title}</div>
 
         {/* Subtitle (optional) */}
-        {subtitle ? (
-          <Text as="div" className={styles.subtitle}>
-            {subtitle}
-          </Text>
-        ) : null}
+        {subtitle ? <div className={styles.subtitle}>{subtitle}</div> : null}
 
-        {/* Help link line (optional) */}
+        {/* Help link (optional) */}
         {linkUrl ? (
-          <Text as="div" className={styles.linkLine}>
+          <div className={styles.linkLine}>
             <Link href={linkUrl} target="_blank" rel="noreferrer">
               {resolvedLinkText}
             </Link>
-          </Text>
+          </div>
         ) : null}
 
         {/* Required note */}
-        <Text as="div" className={styles.note}>
-          {noteText}
-        </Text>
+        <div className={styles.note}>{noteText}</div>
       </div>
     </div>
   );
