@@ -323,17 +323,19 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           }
 
           const atts: SPAttachment[] = Array.isArray(attsRaw)
-            ? (attsRaw as unknown[]).map((x): SPAttachment | undefined => {
-                if (x && typeof x === 'object') {
-                  const o = x as Record<string, unknown>;
-                  const FileName = typeof o.FileName === 'string' ? o.FileName : undefined;
-                  const ServerRelativeUrl =
-                    typeof o.ServerRelativeUrl === 'string' ? o.ServerRelativeUrl : undefined;
+            ? (attsRaw as unknown[])
+                .map((x): SPAttachment | undefined => {
+                  if (x && typeof x === 'object') {
+                    const o = x as Record<string, unknown>;
+                    const FileName = typeof o.FileName === 'string' ? o.FileName : undefined;
+                    const ServerRelativeUrl =
+                      typeof o.ServerRelativeUrl === 'string' ? o.ServerRelativeUrl : undefined;
 
-                  if (FileName && ServerRelativeUrl) return { FileName, ServerRelativeUrl };
-                }
-                return undefined;
-              }).filter((x): x is SPAttachment => !!x)
+                    if (FileName && ServerRelativeUrl) return { FileName, ServerRelativeUrl };
+                  }
+                  return undefined;
+                })
+                .filter((x): x is SPAttachment => !!x)
             : [];
 
           setSpAttachments(atts);
@@ -479,27 +481,34 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
         (context as { pageContext?: { web?: { absoluteUrl?: string } } } | undefined)?.pageContext?.web?.absoluteUrl ??
         (typeof window !== 'undefined' ? window.location.origin : undefined);
 
+      // SharePoint write/delete operations commonly require a request digest.
+      const requestDigest: string | undefined =
+        (
+          context as {
+            pageContext?: { legacyPageContext?: { formDigestValue?: string } };
+          } | undefined
+        )?.pageContext?.legacyPageContext?.formDigestValue;
+
       if (!baseUrl || !itemId || (!listGuid && !listTitle)) return;
 
       const encTitle = listTitle ? encodeURIComponent(listTitle) : '';
-      const encFile = encodeURIComponent(fileName);
+      const encFile = fileName.replace(/'/g, "''");
       const idStr = encodeURIComponent(String(itemId));
 
       const urls: string[] = [];
       if (listGuid) {
         urls.push(
-          `${baseUrl}/_api/web/lists(guid'${listGuid}')/items(${idStr})/AttachmentFiles/getByFileName('${encFile}')`,
-          `${baseUrl}/web/lists(guid'${listGuid}')/items(${idStr})/AttachmentFiles/getByFileName('${encFile}')`
+          `${baseUrl}/_api/web/lists(guid'${listGuid}')/items(${idStr})/AttachmentFiles/getByFileName('${encFile}')`
         );
       }
       if (listTitle) {
         urls.push(
-          `${baseUrl}/_api/web/lists/getbytitle('${encTitle}')/items(${idStr})/AttachmentFiles/getByFileName('${encFile}')`,
-          `${baseUrl}/web/lists/getbytitle('${encTitle}')/items(${idStr})/AttachmentFiles/getByFileName('${encFile}')`
+          `${baseUrl}/_api/web/lists/getbytitle('${encTitle}')/items(${idStr})/AttachmentFiles/getByFileName('${encFile}')`
         );
       }
 
       setDeletingName(fileName);
+      setLoadError('');
       let success = false;
       let lastErr: unknown = null;
 
@@ -508,7 +517,11 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           await getFetchAPI({
             spUrl,
             method: 'DELETE',
-            headers: { 'IF-MATCH': '*', Accept: 'application/json;odata=nometadata' },
+            headers: {
+              'IF-MATCH': '*',
+              Accept: 'application/json;odata=nometadata',
+              ...(requestDigest ? { 'X-RequestDigest': requestDigest } : {}),
+            },
           });
           success = true;
           break;
@@ -521,6 +534,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                 'IF-MATCH': '*',
                 'X-HTTP-Method': 'DELETE',
                 Accept: 'application/json;odata=nometadata',
+                ...(requestDigest ? { 'X-RequestDigest': requestDigest } : {}),
               },
             });
             success = true;
