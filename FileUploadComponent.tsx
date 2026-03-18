@@ -8,14 +8,15 @@ import { DismissRegular, DocumentRegular, AttachRegular } from '@fluentui/react-
 
 import { DynamicFormContext } from './DynamicFormContext';
 import type { FormCustomizerContext } from '@microsoft/sp-listview-extensibility';
-import { getFetchAPI } from '../Utilis/getFetchApi';
+import { getFetchAPI } from '../Utils/getFetchApi';
+import { evaluateFieldRules } from '../Utils/formRulesEngine';
 
-/* --------------------------------- Types --------------------------------- */
+/* ------------------------------ Types ------------------------------ */
 
 export interface FileUploadProps {
   id: string;
   displayName: string;
-  multiple?: boolean;           // default true
+  multiple?: boolean; // default true
   isRequired?: boolean;
   description?: string;
   className?: string;
@@ -27,8 +28,8 @@ type SPAttachment = { FileName: string; ServerRelativeUrl: string };
 
 // Narrow shape we use from DynamicFormContext
 type FormCtxShape = {
-  FormData?: Record<string, unknown>;
-  FormMode?: number;
+  FormData: Record<string, unknown>;
+  FormMode: number;
   GlobalFormData: (id: string, value: unknown) => void;
   GlobalErrorHandle: (id: string, error: string | undefined) => void;
   isDisabled?: boolean;
@@ -37,16 +38,18 @@ type FormCtxShape = {
   Disabled?: boolean;
   AllDisabledFields?: unknown;
   AllHiddenFields?: unknown;
+  curUserInfo: {};
+  formRules: any;
 };
 
-/* ------------------------------- Constants -------------------------------- */
+/* ------------------------------ Constants ------------------------------ */
 
 const REQUIRED_MSG = 'Please select at least one file.';
 const TOTAL_LIMIT_MSG = 'Selected files exceed the 250 MB total size limit.';
 const TOTAL_LIMIT_BYTES = 250 * 1024 * 1024; // 250 MB
 const MAX_NAME_LEN = 150;
 
-/* ------------------------------- Utilities -------------------------------- */
+/* ------------------------------ Utilities ------------------------------ */
 
 const getCtxFlag = (o: Record<string, unknown>, keys: string[]): boolean =>
   keys.some((k) => Object.prototype.hasOwnProperty.call(o, k) && Boolean(o[k]));
@@ -58,32 +61,26 @@ const isListed = (bag: unknown, name: string): boolean => {
   if (Array.isArray(bag)) return bag.some((v) => String(v).trim().toLowerCase() === needle);
 
   if (typeof (bag as { has?: unknown }).has === 'function') {
-    for (const v of bag as Set<unknown>) if (String(v).trim().toLowerCase() === needle) return true;
+    for (const v of bag as Set<unknown>) {
+      if (String(v).trim().toLowerCase() === needle) return true;
+    }
     return false;
   }
 
-  if (typeof bag === 'string') return bag.split(',').map((s) => s.trim().toLowerCase()).includes(needle);
+  if (typeof bag === 'string') {
+    return bag
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .includes(needle);
+  }
 
   if (typeof bag === 'object') {
     for (const [k, v] of Object.entries(bag as Record<string, unknown>)) {
       if (k.trim().toLowerCase() === needle && Boolean(v)) return true;
     }
   }
-  return false;
-};
 
-// SharePoint item indicates attachments present via a few common keys
-const readAttachmentsHint = (fd: Record<string, unknown> | undefined): boolean | undefined => {
-  if (!fd) return undefined;
-  const keys = ['Attachments', 'attachments', 'AttachmentCount', 'attachmentCount'] as const;
-  for (const k of keys) {
-    if (Object.prototype.hasOwnProperty.call(fd, k)) {
-      const v = (fd as Record<string, unknown>)[k];
-      if (typeof v === 'boolean') return v;
-      if (typeof v === 'number') return v > 0;
-    }
-  }
-  return undefined;
+  return false;
 };
 
 // Allow: letters, digits, space, underscore; dots as extension separators
@@ -96,7 +93,10 @@ const formatBytes = (bytes: number): string => {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   let i = 0;
   let n = bytes;
-  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
   return `${Number.isInteger(n) ? n.toFixed(0) : n.toFixed(2)} ${units[i]}`;
 };
 
@@ -134,10 +134,12 @@ function filterNewFiles(
       tooLong.push(name);
       continue;
     }
+
     if (!validFileName(name)) {
       badNames.push(name);
       continue;
     }
+
     if (seen.has(norm)) {
       duplicates.push(name);
       continue;
@@ -149,20 +151,35 @@ function filterNewFiles(
   }
 
   const parts: string[] = [];
+
   if (badNames.length > 0) {
-    parts.push(`Skipped invalid filename${badNames.length > 1 ? 's' : ''}: ${badNames.map(n => `"${n}"`).join(', ')}.`);
+    parts.push(
+      `Skipped invalid filename${badNames.length > 1 ? 's' : ''}: ${badNames
+        .map((n) => `"${n}"`)
+        .join(', ')}.`
+    );
   }
+
   if (tooLong.length > 0) {
-    parts.push(`Skipped over-length filename${tooLong.length > 1 ? 's' : ''} (>${MAX_NAME_LEN} characters): ${tooLong.map(n => `"${n}"`).join(', ')}.`);
+    parts.push(
+      `Skipped over-length filename${tooLong.length > 1 ? 's' : ''} (>${MAX_NAME_LEN} characters): ${tooLong
+        .map((n) => `"${n}"`)
+        .join(', ')}.`
+    );
   }
+
   if (duplicates.length > 0) {
-    parts.push(`Skipped duplicate filename${duplicates.length > 1 ? 's' : ''}: ${duplicates.map(n => `"${n}"`).join(', ')}.`);
+    parts.push(
+      `Skipped duplicate filename${duplicates.length > 1 ? 's' : ''}: ${duplicates
+        .map((n) => `"${n}"`)
+        .join(', ')}.`
+    );
   }
 
   return { validNew, warning: parts.join(' ') };
 }
 
-/* -------------------------------- Component ------------------------------- */
+/* ------------------------------ Component ------------------------------ */
 
 export default function FileUploadComponent(props: FileUploadProps): JSX.Element {
   const {
@@ -176,16 +193,20 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     context,
   } = props;
 
-  const ctx = React.useContext(DynamicFormContext) as unknown as FormCtxShape;
+  const ctx = DynamicFormContext() as unknown as FormCtxShape;
 
   const FormData = ctx.FormData;
   const FormMode = ctx.FormMode ?? 0;
-  const isNewMode = FormMode === 8;       // 8 = New
-  const isDisplayForm = FormMode === 4;   // 4 = Display
+  const isNewMode = FormMode === 8; // 8 = New
+  const isDisplayForm = FormMode === 4; // 4 = Display
 
   const disabledFromCtx = getCtxFlag(ctx as unknown as Record<string, unknown>, [
-    'isDisabled', 'disabled', 'formDisabled', 'Disabled',
+    'isDisabled',
+    'disabled',
+    'formDisabled',
+    'Disabled',
   ]);
+
   const AllDisabledFields = ctx.AllDisabledFields;
   const AllHiddenFields = ctx.AllHiddenFields;
 
@@ -205,7 +226,9 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
   const inputRef = React.useRef<HTMLInputElement>(null);
 
-  React.useEffect(() => setRequired(Boolean(isRequired)), [isRequired]);
+  React.useEffect(() => {
+    setRequired(Boolean(isRequired));
+  }, [isRequired]);
 
   React.useEffect(() => {
     const fromMode = isDisplayForm;
@@ -213,21 +236,31 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     const fromSubmitting = Boolean(submitting);
     const fromDisabledList = isListed(AllDisabledFields, displayName);
     const fromHiddenList = isListed(AllHiddenFields, displayName);
+
     setIsDisabled(fromMode || fromCtx || fromDisabledList || fromSubmitting);
     setIsHidden(fromHiddenList);
+
+    const decision = evaluateFieldRules(props.id, {
+      formMode: ctx.FormMode,
+      formData: ctx.FormData,
+      curUserInfo: ctx.curUserInfo,
+      formConfigJson: ctx.formRules,
+    });
+
+    if (decision.isDisabled !== undefined) {
+      setIsDisabled(decision.isDisabled || fromMode || fromCtx || fromDisabledList || fromSubmitting);
+    }
+
+    if (decision.isHidden !== undefined) {
+      setIsHidden(decision.isHidden);
+    } else {
+      setIsHidden(false); // reset so it doesn't get stuck hidden
+    }
   }, [isDisplayForm, disabledFromCtx, AllDisabledFields, AllHiddenFields, displayName, submitting]);
 
-  /* ------------------------- Load existing (Edit/View) ------------------------- */
+  /* ------------------------------ Load existing (Edit/View) ------------------------------ */
   React.useEffect((): void | (() => void) => {
     if (isNewMode) return;
-
-    const hint = readAttachmentsHint(FormData);
-    if (hint === false) {
-      setSpAttachments([]);
-      setLoadingSP(false);
-      setLoadError('');
-      return;
-    }
 
     const listTitle: string | undefined = (context as { list?: { title?: string } } | undefined)?.list?.title;
     const listGuid: string | undefined = (context as { list?: { id?: string } } | undefined)?.list?.id;
@@ -260,6 +293,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     }
 
     let cancelled = false;
+
     (async (): Promise<void> => {
       setLoadingSP(true);
       setLoadError('');
@@ -268,6 +302,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
       for (const spUrl of urls) {
         if (cancelled) return;
+
         try {
           const respUnknown: unknown = await getFetchAPI({
             spUrl,
@@ -278,6 +313,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           let attsRaw: unknown;
           if (respUnknown && typeof respUnknown === 'object') {
             const r = respUnknown as Record<string, unknown>;
+
             if (Array.isArray(r.value)) {
               const first = r.value[0] as Record<string, unknown> | undefined;
               attsRaw = first?.AttachmentFiles;
@@ -291,7 +327,9 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                 if (x && typeof x === 'object') {
                   const o = x as Record<string, unknown>;
                   const FileName = typeof o.FileName === 'string' ? o.FileName : undefined;
-                  const ServerRelativeUrl = typeof o.ServerRelativeUrl === 'string' ? o.ServerRelativeUrl : undefined;
+                  const ServerRelativeUrl =
+                    typeof o.ServerRelativeUrl === 'string' ? o.ServerRelativeUrl : undefined;
+
                   if (FileName && ServerRelativeUrl) return { FileName, ServerRelativeUrl };
                 }
                 return undefined;
@@ -313,12 +351,16 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
         setLoadingSP(false);
         setLoadError(msg);
       }
-    })().catch(() => { /* no-op */ });
+    })().catch(() => {
+      /* no-op */
+    });
 
-    return (): void => { cancelled = true; };
-  }, [isNewMode, FormData, context]);
+    return (): void => {
+      cancelled = true;
+    };
+  }, [isNewMode, context]);
 
-  /* ------------------------ Filtering, validation & committing ------------------------ */
+  /* ------------------------------ Filtering, validation & committing ------------------------------ */
 
   // Convert selected files to Blobs and write to shared context.
   const commitWithBlob = React.useCallback(
@@ -329,26 +371,24 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       }));
 
       const payload: unknown =
-        list.length === 0
-          ? undefined
-          : multiple
-          ? blobItems
-          : blobItems[0];
+        list.length === 0 ? undefined : multiple ? blobItems : blobItems[0];
 
       ctx.GlobalFormData(id, payload);
     },
     [ctx, id, multiple]
   );
 
-  /* -------------------------------- Handlers ------------------------------- */
+  /* ------------------------------ Handlers ------------------------------ */
 
-  const openPicker = (): void => { if (!isDisabled) inputRef.current?.click(); };
+  const openPicker = (): void => {
+    if (!isDisabled) inputRef.current?.click();
+  };
 
   const onFilesPicked: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
     const picked = Array.from(e.currentTarget.files ?? []);
 
     // Prepare dedupe baseline from current valid selection
-    const existingNames = new Set(files.map(f => normalizeName(f.name)));
+    const existingNames = new Set(files.map((f) => normalizeName(f.name)));
 
     // Filter only the newly picked files (do not re-validate existing ones)
     const { validNew, warning } = filterNewFiles(
@@ -362,7 +402,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     // Validate combined size using ONLY next (post-filter & post-dedupe)
     const totalBytes = next.reduce((sum, f) => sum + (f?.size ?? 0), 0);
     if (totalBytes > TOTAL_LIMIT_BYTES) {
-      setError(TOTAL_LIMIT_MSG);            // local only
+      setError(TOTAL_LIMIT_MSG); // local only
       ctx.GlobalErrorHandle(id, undefined); // do not set global for size
       if (inputRef.current) inputRef.current.value = '';
       return;
@@ -424,12 +464,13 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     if (inputRef.current) inputRef.current.value = '';
   };
 
-  /* --------------------------- Delete existing file ------------------------ */
+  /* ------------------------------ Delete existing file ------------------------------ */
 
   const deleteExistingAttachment = React.useCallback(
     async (fileName: string): Promise<void> => {
       if (!context) return;
-      if (!window.confirm(`Are you sure you want to delete "${fileName}"?`)) return;
+
+      if (!window.confirm(`Are you sure you want to delete this file?\n\n${fileName}`)) return;
 
       const listTitle: string | undefined = (context as { list?: { title?: string } } | undefined)?.list?.title;
       const listGuid: string | undefined = (context as { list?: { id?: string } } | undefined)?.list?.id;
@@ -441,8 +482,8 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       if (!baseUrl || !itemId || (!listGuid && !listTitle)) return;
 
       const encTitle = listTitle ? encodeURIComponent(listTitle) : '';
-      const encFile  = encodeURIComponent(fileName);
-      const idStr    = encodeURIComponent(String(itemId));
+      const encFile = encodeURIComponent(fileName);
+      const idStr = encodeURIComponent(String(itemId));
 
       const urls: string[] = [];
       if (listGuid) {
@@ -467,7 +508,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
           await getFetchAPI({
             spUrl,
             method: 'DELETE',
-            headers: { 'IF-MATCH': '*', Accept: 'application/json;odata=nometadata' }
+            headers: { 'IF-MATCH': '*', Accept: 'application/json;odata=nometadata' },
           });
           success = true;
           break;
@@ -479,8 +520,8 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
               headers: {
                 'IF-MATCH': '*',
                 'X-HTTP-Method': 'DELETE',
-                Accept: 'application/json;odata=nometadata'
-              }
+                Accept: 'application/json;odata=nometadata',
+              },
             });
             success = true;
             break;
@@ -493,8 +534,10 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       setDeletingName(null);
 
       if (success) {
-        setSpAttachments(prev =>
-          Array.isArray(prev) ? prev.filter(a => a.FileName !== fileName) : prev
+        setSpAttachments((prev) =>
+          Array.isArray(prev)
+            ? prev.filter((a) => normalizeName(a.FileName) !== normalizeName(fileName))
+            : prev
         );
       } else {
         const msg = lastErr instanceof Error ? lastErr.message : 'Failed to delete the attachment.';
@@ -504,7 +547,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     [context]
   );
 
-  /* --------------------------------- Render -------------------------------- */
+  /* ------------------------------ Render ------------------------------ */
 
   if (isHidden) return <div hidden className="fieldClass" />;
 
@@ -535,6 +578,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
               <div style={{ display: 'grid', gap: 6 }}>
                 {spAttachments.map((a) => {
                   const busy = deletingName === a.FileName;
+
                   return (
                     <div
                       key={a.ServerRelativeUrl}
@@ -548,6 +592,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                       }}
                     >
                       <DocumentRegular />
+
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div
                           style={{
@@ -570,7 +615,9 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                         icon={<DismissRegular />}
                         disabled={busy || isDisabled}
                         aria-label={`Delete ${a.FileName}`}
-                        onClick={() => { deleteExistingAttachment(a.FileName).catch(() => {}); }}
+                        onClick={() => {
+                          deleteExistingAttachment(a.FileName).catch(() => {});
+                        }}
                       >
                         {busy ? 'Deleting…' : 'Delete'}
                       </Button>
@@ -599,11 +646,18 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
         />
 
         {/* Actions */}
-        <div className={className} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div
+          className={className}
+          style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
+        >
           <Button appearance="primary" icon={<AttachRegular />} onClick={openPicker} disabled={isDisabled}>
             {files.length === 0
-              ? multiple ? 'Choose files' : 'Choose file'
-              : multiple ? 'Add more files' : 'Choose different file'}
+              ? multiple
+                ? 'Choose files'
+                : 'Choose file'
+              : multiple
+                ? 'Add more files'
+                : 'Choose different file'}
           </Button>
 
           {files.length > 0 && (
@@ -629,6 +683,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                 }}
               >
                 <DocumentRegular />
+
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{
@@ -641,6 +696,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                   >
                     {f.name}
                   </div>
+
                   <Text size={200}>
                     {formatBytes(f.size)} • {f.type || 'unknown type'}
                   </Text>
@@ -649,7 +705,9 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
                 <Button
                   size="small"
                   icon={<DismissRegular />}
-                  onClick={() => { removeAt(i).catch(() => {}); }}
+                  onClick={() => {
+                    removeAt(i).catch(() => {});
+                  }}
                   disabled={isDisabled}
                   aria-label={`Remove ${f.name}`}
                 />
@@ -666,9 +724,17 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
 
         {/* Permanent guidance text under description — same style/color as description */}
         <div className="descriptionText" style={{ marginTop: 6, lineHeight: 1.4 }}>
-          <div><strong>Filename rules:</strong> Up to {MAX_NAME_LEN} characters; letters, numbers, spaces, underscores, and dots only.</div>
-          <div><strong>Size limit:</strong> Combined attachments must not exceed 250&nbsp;MB.</div>
-          <div><strong>Heads-up:</strong> Files with disallowed characters, duplicates, or overly long names will be skipped.</div>
+          <div>
+            <strong>Filename rules:</strong> Up to {MAX_NAME_LEN} characters; letters, numbers, spaces,
+            underscores, and dots only.
+          </div>
+          <div>
+            <strong>Size limit:</strong> Combined attachments must not exceed 250&nbsp;MB.
+          </div>
+          <div>
+            <strong>Heads-up:</strong> Files with disallowed characters, duplicates, or overly long names will
+            be skipped.
+          </div>
         </div>
       </Field>
     </div>
