@@ -179,6 +179,82 @@ function filterNewFiles(
   return { validNew, warning: parts.join(' ') };
 }
 
+/**
+ * Ensure filenames are unique by base name (case-insensitive).
+ * Example:
+ * - test.docx
+ * - test.png
+ * becomes:
+ * - test.docx
+ * - test_1.png
+ *
+ * Existing numeric suffixes are respected so a new duplicate does not
+ * accidentally create another collision.
+ */
+function ensureUniqueFilenames(
+  pickedFiles: File[],
+  existingFullNames: Set<string>
+): File[] {
+  const usedBaseNames = new Set<string>();
+
+  const getNameParts = (fileName: string): { base: string; extension: string } => {
+    const lastDot = fileName.lastIndexOf('.');
+    if (lastDot <= 0) {
+      return { base: fileName, extension: '' };
+    }
+
+    return {
+      base: fileName.slice(0, lastDot),
+      extension: fileName.slice(lastDot),
+    };
+  };
+
+  const splitBaseAndSuffix = (baseName: string): { root: string; suffixNumber: number | undefined } => {
+    const match = baseName.match(/^(.*?)(?:_(\d+))?$/);
+    if (!match) {
+      return { root: baseName, suffixNumber: undefined };
+    }
+
+    return {
+      root: match[1],
+      suffixNumber: match[2] !== undefined ? Number(match[2]) : undefined,
+    };
+  };
+
+  // Seed used base names from anything already selected / already attached.
+  for (const fullName of existingFullNames) {
+    const { base } = getNameParts(fullName);
+    usedBaseNames.add(base.toLowerCase());
+  }
+
+  const renamedFiles: File[] = [];
+
+  for (const file of pickedFiles) {
+    const { base, extension } = getNameParts(file.name);
+    const { root } = splitBaseAndSuffix(base);
+
+    let nextBase = base;
+    let counter = 1;
+
+    while (usedBaseNames.has(nextBase.toLowerCase())) {
+      nextBase = `${root}_${counter}`;
+      counter += 1;
+    }
+
+    usedBaseNames.add(nextBase.toLowerCase());
+
+    const nextName = `${nextBase}${extension}`;
+
+    if (nextName === file.name) {
+      renamedFiles.push(file);
+    } else {
+      renamedFiles.push(new File([file], nextName, { type: file.type }));
+    }
+  }
+
+  return renamedFiles;
+}
+
 /* ------------------------------ Component ------------------------------ */
 
 export default function FileUploadComponent(props: FileUploadProps): JSX.Element {
@@ -398,8 +474,16 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       multiple ? existingNames : new Set<string>() // in single-file mode, always replace
     );
 
+    // Ensure outgoing filenames are unique by base name, case-insensitively,
+    // across both current selections and existing SharePoint attachments.
+    const existingAllNames = new Set<string>([
+      ...files.map((f) => normalizeName(f.name)),
+      ...(spAttachments ?? []).map((a) => normalizeName(a.FileName)),
+    ]);
+    const uniqueNew = ensureUniqueFilenames(validNew, existingAllNames);
+
     // Compute the next set to show/commit
-    const next = multiple ? files.concat(validNew) : validNew.slice(0, 1);
+    const next = multiple ? files.concat(uniqueNew) : uniqueNew.slice(0, 1);
 
     // Validate combined size using ONLY next (post-filter & post-dedupe)
     const totalBytes = next.reduce((sum, f) => sum + (f?.size ?? 0), 0);
