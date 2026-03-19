@@ -225,6 +225,7 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
   const [deletingName, setDeletingName] = React.useState<string | null>(null);
 
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const lastAlertedMessageRef = React.useRef<string>('');
 
   React.useEffect(() => {
     setRequired(Boolean(isRequired));
@@ -257,6 +258,21 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       setIsHidden(false); // reset so it doesn't get stuck hidden
     }
   }, [isDisplayForm, disabledFromCtx, AllDisabledFields, AllHiddenFields, displayName, submitting]);
+
+  // Alert the user when an important message appears so it cannot be missed.
+  React.useEffect(() => {
+    const message = error || loadError;
+
+    if (!message) {
+      lastAlertedMessageRef.current = '';
+      return;
+    }
+
+    if (lastAlertedMessageRef.current === message) return;
+
+    lastAlertedMessageRef.current = message;
+    window.alert(message);
+  }, [error, loadError]);
 
   /* ------------------------------ Load existing (Edit/View) ------------------------------ */
   React.useEffect((): void | (() => void) => {
@@ -424,7 +440,13 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     ctx.GlobalErrorHandle(id, requiredMsg ? requiredMsg : undefined);
 
     // Commit only what passed validation
-    await commitWithBlob(next);
+    try {
+      await commitWithBlob(next);
+    } catch (commitErr: unknown) {
+      const msg = commitErr instanceof Error ? commitErr.message : 'Failed to prepare attachments.';
+      setError(msg);
+      ctx.GlobalErrorHandle(id, undefined);
+    }
 
     if (inputRef.current) inputRef.current.value = '';
   };
@@ -447,7 +469,14 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       ctx.GlobalErrorHandle(id, requiredMsg ? requiredMsg : undefined);
 
       if (!msg || requiredMsg === '') {
-        await commitWithBlob(next);
+        try {
+          await commitWithBlob(next);
+        } catch (commitErr: unknown) {
+          const commitMsg =
+            commitErr instanceof Error ? commitErr.message : 'Failed to update attachments.';
+          setError(commitMsg);
+          ctx.GlobalErrorHandle(id, undefined);
+        }
       }
     },
     [files, required, ctx, id, commitWithBlob]
@@ -462,7 +491,14 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
     // Only set global for required; otherwise clear it
     ctx.GlobalErrorHandle(id, requiredMsg ? requiredMsg : undefined);
 
-    await commitWithBlob([]);
+    try {
+      await commitWithBlob([]);
+    } catch (commitErr: unknown) {
+      const msg = commitErr instanceof Error ? commitErr.message : 'Failed to clear attachments.';
+      setError(msg);
+      ctx.GlobalErrorHandle(id, undefined);
+    }
+
     if (inputRef.current) inputRef.current.value = '';
   };
 
@@ -570,7 +606,11 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
       <Field
         label={displayName}
         required={required}
-        validationMessage={error || undefined}
+        validationMessage={
+          error ? (
+            <span style={{ color: 'red', fontWeight: 700 }}>{error}</span>
+          ) : undefined
+        }
         validationState={error ? 'error' : undefined}
       >
         {/* Existing attachments in Edit/View */}
@@ -583,7 +623,11 @@ export default function FileUploadComponent(props: FileUploadProps): JSX.Element
             )}
 
             {!loadingSP && loadError && (
-              <Text size={200} aria-live="polite">
+              <Text
+                size={200}
+                aria-live="polite"
+                style={{ color: 'red', fontWeight: 700 }}
+              >
                 Error: {loadError}
               </Text>
             )}
