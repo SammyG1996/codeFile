@@ -7,53 +7,88 @@ import * as React from 'react';
 import {
   Select,
   Text,
-  Label,
+  Field,
 } from '@fluentui/react-components';
 
 export interface RequestTypeSelectorProps {
   // The control id used for the Select and its associated label
   id: string;
+
+  setSelected: any;
+
+  setSelCols: any;
+
+  list: any;
+
+  setDynContentTypeID: any;
   // Optional list of request type choices; defaults are used if nothing is provided
-  requestTypes?: string[];
+  // requestTypes?: string[];
   // Optional current value controlled by a parent
   value?: string;
   // Optional callback to inform a parent when the selection changes
   onChange?: (requestType: string) => void;
-  // Optional heading text shown above the field
-  title?: string;
   // Optional label text shown next to the red required asterisk
   label?: string;
+
+  setDisplayRequestType: any;
+  setSelectedType: any;
+  selectedType: string;
+
+  // When true, the field should be locked so the user cannot change it during submit
+  submitting?: boolean;
 }
 
 // Default choices to fall back to when no list is passed in
-const defaultRequestTypes: string[] = [
-  'New-Online Help',
-  'New-Policy',
-  'New-Standard Operating Procedure (SOP)',
-  'New-Desktop Procedure (DP)'
-  // 'Change-Online Help',
-  // 'Change-Policy',
-  // 'Change-Standard Operating Procedure (SOP)',
-  // 'Change-Desktop Procedure (DP)',
-  // 'Archive (Online Help Only)',
-  // 'Retire (Procedural Documents Only)',
-  // 'Request for Information-Online Help',
-  // 'Request for Information-Procedural Documents',
-];
+// const defaultRequestTypes: string[] = [
+//   'New-Online Help',
+//   'New-Policy',
+//   'New-Standard Operating Procedure (SOP)',
+//   'New-Desktop Procedure (DP)',
+//   'Change-Online Help',
+//   'Change-Policy',
+//   'Change-Standard Operating Procedure (SOP)',
+//   'Change-Desktop Procedure (DP)',
+//   'Archive (Online Help Only)',
+//   'Retrieve (Procedural Documents Only)',
+//   'Request for Information-Online Help',
+//   'Request for Information-Procedural Documents',
+// ];
 
 const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
   // Pull out props and apply defaults so the component works even when props are omitted
   const {
     id,
-    requestTypes = defaultRequestTypes,
+    setSelected,
+    setSelCols,
+    list,
+    setDynContentTypeID,
     value,
     onChange,
-    title = 'Please select Request Type to begin',
     label = 'Request Type',
+    setDisplayRequestType,
+    setSelectedType,
+    selectedType,
+    submitting,
   } = props;
 
+  const title = `Please select ${label} to begin`;
+  const requestTypes = list.ResultsData.listData
+    .filter((item: any) => ((item.group === "Custom Content Types" && item.name !== "Item") || (item.group === "List Content Types" && item.name === "Item")))
+    .map((item: any) => ({ name: item.name, columns: item.columns, ID: item.ID }));
+
+  /**If this is true that means we dont have to display the request type picker */
+  if (requestTypes.length === 1) {
+    setDisplayRequestType(false);
+    setSelected(true);
+    setDynContentTypeID(requestTypes[0].ID); /**this is necessary */
+    return <></>; /** we return an empty fragment so nothing renders*/
+  }
+
   // Track the current selection inside this component; seed from parent value if provided
-  const [selectedType, setSelectedType] = React.useState<string>(value ?? '');
+  if (value !== undefined && value !== '') {
+    setSelectedType(value);
+  }
+
   // Remember if the user has picked any non-empty option; once true, the blank placeholder gets disabled
   const [placeholderLocked, setPlaceholderLocked] = React.useState<boolean>(
     Boolean(value)
@@ -71,8 +106,18 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
   const handleChange: React.ChangeEventHandler<HTMLSelectElement> = (
     event
   ): void => {
+    // Extra protection: do nothing while the form is submitting
+    if (submitting) {
+      return;
+    }
+
     const next = event.target.value ?? ''; // Read the new selection safely
+    const selColumns = requestTypes.find((item: any) => item.name === next)?.columns;
+    const selColumnsID = requestTypes.find((item: any) => item.name === next)?.ID;
+    setSelCols(selColumns);
+    setDynContentTypeID(selColumnsID);
     setSelectedType(next); // Update local state so the UI reflects the new choice
+    setSelected(true);
 
     // Once a real value is chosen, block the blank placeholder from being reselected
     if (next) setPlaceholderLocked(true);
@@ -82,7 +127,7 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
   };
 
   return (
-    <div className="ks-requestTypeWrapper">
+    <div className="ks-requestTypeWrapper" >
       {/* Instruction above the field, shown in red to match the provided reference */}
       <div style={{ marginBottom: 12 }}>
         <Text
@@ -101,27 +146,18 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
 
       {/* Request type field: stacked label and select so it aligns with other inputs on the page */}
       <div className="ks-requestTypeRow">
-        <Label
-          htmlFor={id}
-          style={{
-            display: 'flex',
-            alignItems: 'baseline',
-            gap: 4,
-            fontWeight: 600,
-            fontSize: 18,
-            color: '#444',
-            marginBottom: 6,
-          }}
+        <Field
+          label={label}
+          required={true}
         >
-          <span>{label}</span>
-          <span style={{ color: '#c00000' }}>*</span>
-        </Label>
+        </Field>
 
         <Select
           id={id}
           name={id}
-          value={selectedType}
+          value={`${selectedType}`}
           onChange={handleChange}
+          disabled={Boolean(submitting)}
           style={{
             width: '100%',
             border: 'none',
@@ -134,7 +170,7 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
             outline: 'none',
             minHeight: 36,
           }}
-          title={selectedType || 'Select a request type'}
+          title={`${selectedType}` || 'Select a request type'}
         >
           {/* Placeholder keeps the field blank initially; it disables itself after first real choice */}
           <option
@@ -143,9 +179,9 @@ const RequestTypeSelector = (props: RequestTypeSelectorProps): JSX.Element => {
             aria-label="Select a request type"
           />
 
-          {requestTypes.map((rt) => (
-            <option key={rt} value={rt}>
-              {rt}
+          {requestTypes.map((rt: any) => (
+            <option key={rt.name} value={rt.name}>
+              {rt.name}
             </option>
           ))}
         </Select>
